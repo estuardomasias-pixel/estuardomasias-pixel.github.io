@@ -49,7 +49,7 @@ renderer.xr.enabled = true;
 renderer.xr.setReferenceSpaceType('local-floor');
 // Graphics: sharpness + frame rate first. Resolution is a multiple of the headset's NATIVE panel resolution.
 const GFX_KEY = 'emberwild-gfx-v1';
-const GFX = { res: 'native', hz: 90, grip: 'hold' };
+const GFX = { res: 'native', hz: 90, grip: 'hold', stance: 'standing' };
 try { Object.assign(GFX, JSON.parse(localStorage.getItem(GFX_KEY) || '{}')); } catch (e) { }
 const RES_MODES = { perf: { mul: 0.85, fov: 1, label: 'Performance (85%)' }, native: { mul: 1.0, fov: 0.25, label: 'Native (full sharpness)' }, super: { mul: 1.25, fov: 0.25, label: 'Supersampled (125%)' } };
 renderer.xr.setFoveation(RES_MODES[GFX.res]?.fov ?? 0.25);
@@ -769,14 +769,27 @@ for (let i = 0; i < 2; i++) {
     else { grip.add(shield); grip.add(wrist.mesh); }
   });
   grip.addEventListener('disconnected', () => { for (const k of ['left', 'right']) if (hands[k] && hands[k].grip === grip) { resetHandState(k); hands[k] = null; } });
+  const ray = renderer.xr.getController(i); dolly.add(ray); // pointing direction, used to aim the gravity pull
+  ray.addEventListener('connected', e => { const sd = e.data?.handedness; if (sd === 'left' || sd === 'right') { rays[sd] = ray; ray.userData.side = sd; } });
+  ray.addEventListener('disconnected', () => { const sd = ray.userData.side; if (sd && rays[sd] === ray) rays[sd] = null; });
+}
+// Seated mode: the Quest reports your real head height above the real floor (local-floor). Seated, that is ~1.2 m,
+// so the world is lifted by the difference to a 1.65 m standing eye height. X re-measures it (e.g. after sitting down).
+const STAND_EYE = 1.65; let heightOffset = 0;
+function recenterHeight(announce) {
+  if (!inVR) { heightOffset = 0; return; }
+  if (GFX.stance !== 'seated') { heightOffset = 0; if (announce) toast('Standing mode uses your real height. Choose Seated on the title screen to play sitting down.', 4, true); return; }
+  heightOffset = clamp(STAND_EYE - camera.position.y, 0, 1.3);
+  if (announce) toast(`Seated mode: eye height set to ${STAND_EYE} m (raised ${heightOffset.toFixed(2)} m). Press X to re-measure.`, 3.5, true);
 }
 renderer.xr.addEventListener('sessionstart', () => {
+  setTimeout(() => recenterHeight(GFX.stance === 'seated'), 1500); // wait for head tracking to settle
   inVR = true; dolly.rotation.y = yaw; camera.rotation.set(0, 0, 0); promptText = null; startGame();
 });
 renderer.xr.addEventListener('sessionend', () => {
   // keep the player where their head was (room-scale offset), not where the dolly origin is
   _v1.set(camera.position.x, 0, camera.position.z).applyQuaternion(dolly.quaternion); dolly.position.x += _v1.x; dolly.position.z += _v1.z;
-  inVR = false; yaw = dolly.rotation.y; dolly.rotation.y = 0; pitch = 0; camera.position.set(0, 1.6, 0);
+  inVR = false; heightOffset = 0; yaw = dolly.rotation.y; dolly.rotation.y = 0; pitch = 0; camera.position.set(0, 1.6, 0);
   // WebXR overwrote the camera projection with the headset's; restore the flat-screen one
   camera.fov = 72; camera.zoom = 1; camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix();
   $('hud').style.display = running ? 'block' : 'none'; promptText = null;
@@ -905,7 +918,7 @@ function highlightStone(st, on) { stoneMesh.setColorAt(st.idx, on ? STONE_HI : S
 function updateStones(dt) {
   for (const s of stones) {
     s.hitCd -= dt;
-    if (s.held || s.rest) continue;
+    if (s.held || s.rest || s.flying) continue;
     s.v.y -= 9.8 * dt; s.p.addScaledVector(s.v, dt);
     const gy = heightAt(s.p.x, s.p.z) + s.r * 0.8;
     if (s.p.y < gy) { s.p.y = gy; if (s.v.y < -1.5) tone(180 + Math.random() * 60, 0.05, 'triangle', 0.05); s.v.y = -s.v.y * 0.3; s.v.x *= 0.55; s.v.z *= 0.55; if (s.v.length() < 0.35) { s.rest = true; s.v.set(0, 0, 0); } }
@@ -921,6 +934,41 @@ function updateStones(dt) {
   }
 }
 function makePotionMesh() { const m = new THREE.Mesh(potionGeo, potionMat); const neck = new THREE.Mesh(potionNeckGeo, M.lamp); neck.position.y = 0.18; m.add(neck); m.scale.setScalar(0.7); return m; }
+
+// ---------------------------------------------------------------- gravity pull
+// Point a free hand at a stone or a dropped potion (within 8 m) and squeeze grip: it flies to your hand. This makes
+// things on the ground reachable when playing seated.
+const rays = { left: null, right: null }, pulling = { left: null, right: null }, pullAim = { left: null, right: null };
+const _ro = new THREE.Vector3(), _rdir = new THREE.Vector3(), _rq = new THREE.Quaternion(), _pv = new THREE.Vector3();
+const aimLines = {};
+for (const side of ['left', 'right']) {
+  const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(6), 3));
+  const l = new THREE.Line(g, new THREE.LineBasicMaterial({ color: 0xffd27a, transparent: true, opacity: 0.55, fog: false })); l.frustumCulled = false; l.visible = false; scene.add(l); aimLines[side] = l;
+}
+function pullCandidate(side) {
+  const ray = rays[side]; if (!ray) return null;
+  ray.getWorldPosition(_ro); _rdir.set(0, 0, -1).applyQuaternion(ray.getWorldQuaternion(_rq));
+  let best = null, bc = 0.985; // within about 10 degrees of where you point
+  const test = (pos, c) => { _pv.subVectors(pos, _ro); const d = _pv.length(); if (d < 0.5 || d > 8) return; const cos = _pv.dot(_rdir) / d; if (cos > bc) { bc = cos; best = c; } };
+  for (const st of stones) if (!st.held && !st.flying) test(st.p, { kind: 'stone', s: st });
+  for (const pk of pickups) if (!pk.flying) test(pk.m.position, { kind: 'pickup', pk });
+  return best;
+}
+function startPull(side, c) { pulling[side] = c; if (c.s) { c.s.flying = side; c.s.rest = false; } else c.pk.flying = side; pulse(side, 0.4, 60); tone(520, 0.12, 'sine', 0.06, 300); }
+function cancelPull(side) { const c = pulling[side]; if (!c) return; pulling[side] = null; if (c.s) { c.s.flying = null; c.s.rest = false; } else c.pk.flying = null; }
+function updatePull(side, p, dt) {
+  const c = pulling[side]; if (!c) return;
+  const pos = c.s ? c.s.p : c.pk.m.position, d = pos.distanceTo(p);
+  pos.lerp(p, Math.min(1, dt * 7)); pos.y += Math.min(d, 2) * dt * 1.5; // flies to the hand in a slight arc
+  if (c.s) syncStone(c.s);
+  if (d < 0.18) { // arrived
+    pulling[side] = null;
+    if (c.s) { c.s.flying = null; c.s.held = side; c.s.v.set(0, 0, 0); grab[side] = { kind: 'stone', s: c.s }; }
+    else { const i = pickups.indexOf(c.pk); if (i >= 0) pickups.splice(i, 1); scene.remove(c.pk.m); const m = makePotionMesh(); scene.add(m); grab[side] = { kind: 'potion', m }; sfx.pickup(); }
+    pulse(side, 0.6, 50);
+    if (!gripHeld[side] && GFX.grip !== 'toggle') releaseGrab(side, true); // let go mid-flight: it drops at your hand
+  }
+}
 
 // grab state per hand: null or { kind: 'stone'|'rag'|'potion', ... }
 const grab = { left: null, right: null }, gripHeld = { left: false, right: false }, gripToggle = { left: false, right: false }, hover = { left: null, right: null };
@@ -956,7 +1004,8 @@ function tryGrab(side, p) {
   pulse(side, 0.5, 40); return true;
 }
 function resetHandState(side) { // drop whatever the hand holds and forget its hover/grip/velocity history
-  releaseGrab(side, true);
+  releaseGrab(side, true); cancelPull(side); pullAim[side] = null; aimLines[side].visible = false;
+  if (pickups.includes(hover[side])) hover[side].m.scale.setScalar(1);
   if (stones.includes(hover[side])) highlightStone(hover[side], false);
   hover[side] = null; gripHeld[side] = false; gripToggle[side] = false; handHist[side].length = 0;
 }
@@ -990,13 +1039,26 @@ function updateHands(dt) {
       if (pressEdge && p.distanceTo(_sheathPt) < 0.3) { sheatheSword(); pulse('right', 0.7, 50); }
     } else if (grab[side]) {
       if ((toggleMode && pressEdge) || (!toggleMode && releaseEdge)) releaseGrab(side, false);
+    } else if (pulling[side]) {
+      if (!toggleMode && releaseEdge) cancelPull(side); // let go before it arrives: it drops
     } else if (pressEdge) {
-      if (!tryGrab(side, p) && side === 'right') { holdSword(); sfx.swing(); pulse('right', 0.7, 50); } // nothing to grab: draw the sword
+      if (!tryGrab(side, p)) {
+        if (pullAim[side]) startPull(side, pullAim[side]); // pointing at something: pull it
+        else if (side === 'right') { holdSword(); sfx.swing(); pulse('right', 0.7, 50); } // nothing to grab: draw the sword
+      }
     }
+    updatePull(side, p, dt);
     // hover feedback
-    const cand = (!grab[side] && !(side === 'right' && swordInHand)) ? grabCandidate(side, p) : null;
-    const key = cand ? (cand.s || cand.pk || cand.c || (cand.rd ? cand.rd.P[cand.i] : 'pocket')) : null;
-    if (key !== hover[side]) { if (stones.includes(hover[side])) highlightStone(hover[side], false); if (key) pulse(side, 0.15, 15); hover[side] = key; if (cand?.kind === 'stone') highlightStone(cand.s, true); }
+    const free = !grab[side] && !pulling[side] && !(side === 'right' && swordInHand);
+    const cand = free ? grabCandidate(side, p) : null, aim = free && !cand ? pullCandidate(side) : null; pullAim[side] = aim;
+    const key = cand ? (cand.s || cand.pk || cand.c || (cand.rd ? cand.rd.P[cand.i] : 'pocket')) : aim ? (aim.s || aim.pk) : null;
+    if (key !== hover[side]) {
+      if (stones.includes(hover[side])) highlightStone(hover[side], false); else if (pickups.includes(hover[side])) hover[side].m.scale.setScalar(1);
+      if (key) pulse(side, 0.15, 15); hover[side] = key;
+      if (key && stones.includes(key)) highlightStone(key, true); else if (key && pickups.includes(key)) key.m.scale.setScalar(1.35);
+    }
+    const al = aimLines[side]; al.visible = !!aim; // faint line to what a squeeze would pull
+    if (aim) { const a = al.geometry.attributes.position, t = aim.s ? aim.s.p : aim.pk.m.position; a.setXYZ(0, _ro.x, _ro.y, _ro.z); a.setXYZ(1, t.x, t.y, t.z); a.needsUpdate = true; }
     // carry the held thing
     const gb = grab[side];
     if (gb?.kind === 'stone') { gb.s.p.copy(p); syncStone(gb.s); }
@@ -1386,7 +1448,7 @@ function spawnPickup(type, x, z) { const m = new THREE.Mesh(potionGeo, potionMat
 function updatePickups(dt) {
   const h = headPos();
   for (let i = pickups.length - 1; i >= 0; i--) {
-    const p = pickups[i]; p.t += dt; p.m.position.y = heightAt(p.x, p.z) + 0.6 + Math.sin(p.t * 3) * 0.12; p.m.rotation.y += dt * 2;
+    const p = pickups[i]; if (p.flying) continue; p.t += dt; p.m.position.y = heightAt(p.x, p.z) + 0.6 + Math.sin(p.t * 3) * 0.12; p.m.rotation.y += dt * 2;
     if (Math.hypot(h.x - p.x, h.z - p.z) < (inVR ? 0.45 : 1.6)) { S.potions++; sfx.pickup(); toast('Picked up a healing potion.', 2); scene.remove(p.m); pickups.splice(i, 1); }
     else if (p.t > 120) { scene.remove(p.m); pickups.splice(i, 1); }
   }
@@ -1504,6 +1566,7 @@ function updateMovement(dt) {
     if (R) { const ax = R.axes.length >= 4 ? 2 : 0; turn = R.axes[ax] || 0; }
     if (btnEdge('right', 4)) { if (interactableAt(headPos())) interactQueued = true; else jump(); } // A: talk/open when something is in reach, otherwise jump
     const qB = btnEdge('right', 5), qY = btnEdge('left', 5); if (qB || qY) potionQueued = true; // B or Y: quick-drink
+    if (btnEdge('left', 4)) recenterHeight(true); // X: re-measure seated height
     if (Math.abs(turn) > 0.7 && snapReady) {
       snapReady = false; handHist.left.length = handHist.right.length = 0; const ang = -Math.sign(turn) * Math.PI / 6, h = headPos().clone();
       _v2.subVectors(dolly.position, h).applyAxisAngle(THREE.Object3D.DEFAULT_UP, ang); dolly.position.copy(h).add(_v2); dolly.rotation.y += ang;
@@ -1518,7 +1581,7 @@ function updateMovement(dt) {
     const rx = -f.z, rz = f.x; // right vector
     movePlayer((f.x * -mz + rx * mx) * speed * dt, (f.z * -mz + rz * mx) * speed * dt);
   }
-  const h = headPos(); const target = Math.max(groundAt(h.x, h.z), -1.3);
+  const h = headPos(); const target = Math.max(groundAt(h.x, h.z), -1.3) + (inVR ? heightOffset : 0); // seated mode lifts the player
   if (airborne) { // ballistic jump, then land on whatever height the ground has where you come down
     jumpVy -= JUMP_G * dt; dolly.position.y += jumpVy * dt;
     if (dolly.position.y < target) { // never below the ground: land when falling, ride the slope up while still rising
@@ -1568,6 +1631,7 @@ vrBtn.onclick = () => { const s = renderer.xr.getSession(); if (s) s.end(); else
 const resSel = $('gfxRes'), hzSel = $('gfxHz');
 if (resSel && hzSel) {
   resSel.value = GFX.res; hzSel.value = String(GFX.hz);
+  const stanceSel = $('gfxStance'); if (stanceSel) { stanceSel.value = GFX.stance; stanceSel.onchange = () => { GFX.stance = stanceSel.value; try { localStorage.setItem(GFX_KEY, JSON.stringify(GFX)); } catch (e) { } }; }
   const gripSel = $('gfxGrip'); if (gripSel) { gripSel.value = GFX.grip; gripSel.onchange = () => { GFX.grip = gripSel.value; try { localStorage.setItem(GFX_KEY, JSON.stringify(GFX)); } catch (e) { } }; }
   const store = () => { GFX.res = resSel.value; GFX.hz = +hzSel.value; try { localStorage.setItem(GFX_KEY, JSON.stringify(GFX)); } catch (e) { } };
   resSel.onchange = store; hzSel.onchange = store;
@@ -1618,8 +1682,8 @@ if (['localhost', '127.0.0.1'].includes(location.hostname)) { // debug hooks for
 window.__emberwild = { setDay: v => { dayT = v; }, getDay: () => dayT, SITES, chests, crystals, pickups, villagers, HOUSES, groundAt, houseToWorld, interactableAt, renderer, S, enemies, ragdolls, hitEnemy, playerHands, poseHand, stones, camera, npcs, makeRagdoll, stepRagdoll, heightAt, headPos, dolly, spawnEnemy, startSwing, placePlayer, setYaw: v => { yaw = v; } }; // debug hook
 // debug: fake VR controllers for testing grab logic on a desktop browser (no headset needed)
 window.__emberwild.simVR = () => {
-  const mk = side => { const grip = new THREE.Group(); dolly.add(grip); const btn = () => ({ value: 0, pressed: false, touched: false }); const gamepad = { buttons: [btn(), btn(), btn(), btn(), btn(), btn(), btn()], axes: [0, 0, 0, 0], hapticActuators: [] }; hands[side] = { grip, src: { handedness: side, gamepad }, prev: [], isHand: false }; grip.add(playerHands[side].g); playerHands[side].g.rotation.set(0, 0, 0); return hands[side]; };
+  const mk = side => { const grip = new THREE.Group(); dolly.add(grip); const btn = () => ({ value: 0, pressed: false, touched: false }); const gamepad = { buttons: [btn(), btn(), btn(), btn(), btn(), btn(), btn()], axes: [0, 0, 0, 0], hapticActuators: [] }; hands[side] = { grip, src: { handedness: side, gamepad }, prev: [], isHand: false }; const ray = new THREE.Group(); grip.add(ray); rays[side] = ray; grip.add(playerHands[side].g); playerHands[side].g.rotation.set(0, 0, 0); return hands[side]; };
   inVR = true; const L = mk('left'), R = mk('right'); holdSword(); L.grip.add(shield);
-  return { hands, grab, stones, scabbard, swordInHand: () => swordInHand, S, pickups, bodyPoint };
+  return { hands, grab, stones, scabbard, swordInHand: () => swordInHand, S, pickups, bodyPoint, rays, pulling, pullAim, recenter: () => recenterHeight(true), heightOffset: () => heightOffset };
 };
 }
