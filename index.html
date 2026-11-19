@@ -50,12 +50,16 @@
   <p class="sub">An open-world VR adventure. The Gloom spreads from the Ashen Tower &mdash; rekindle the valley.</p>
   <div class="cols">
     <div><h3>Quest 3 (VR)</h3>
-      Left stick &mdash; walk (hold left grip to run)<br>
+      Left stick &mdash; walk (click it to sprint)<br>
       Right stick &mdash; snap turn<br>
       Swing your right hand &mdash; sword<br>
       Raise left hand &mdash; shield blocks<br>
-      <b>A</b> &mdash; talk / open &nbsp; <b>B</b> &mdash; drink potion<br>
-      Look at your left wrist &mdash; status &amp; quest
+      <b>Grip</b> &mdash; grab &amp; throw stones, bodies, potions<br>
+      Right grip at left hip &mdash; sheathe / draw sword<br>
+      Grab at your chest &mdash; take a potion, drink it at your mouth<br>
+      <b>A</b> &mdash; talk / open &nbsp; <b>B</b> &mdash; quick-drink<br>
+      Look at your left wrist &mdash; status &amp; quest<br>
+      Hand tracking: fist = grab, pinch = talk
     </div>
     <div><h3>PC screen</h3>
       WASD &mdash; move, Shift &mdash; run<br>
@@ -73,6 +77,10 @@
     </select></label>
     <label>Refresh rate <select id="gfxHz">
       <option value="72">72 Hz</option><option value="90">90 Hz</option><option value="120">120 Hz</option>
+    </select></label>
+    <label>Grab <select id="gfxGrip">
+      <option value="hold">Hold grip to carry</option>
+      <option value="toggle">Press grip to pick up / drop</option>
     </select></label>
   </div>
   <button id="play">Play on this screen</button>

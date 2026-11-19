@@ -47,7 +47,7 @@ renderer.xr.enabled = true;
 renderer.xr.setReferenceSpaceType('local-floor');
 // Graphics: sharpness + frame rate first. Resolution is a multiple of the headset's NATIVE panel resolution.
 const GFX_KEY = 'emberwild-gfx-v1';
-const GFX = { res: 'native', hz: 90 };
+const GFX = { res: 'native', hz: 90, grip: 'hold' };
 try { Object.assign(GFX, JSON.parse(localStorage.getItem(GFX_KEY) || '{}')); } catch (e) { }
 const RES_MODES = { perf: { mul: 0.85, fov: 1, label: 'Performance (85%)' }, native: { mul: 1.0, fov: 0.25, label: 'Native (full sharpness)' }, super: { mul: 1.25, fov: 0.25, label: 'Supersampled (125%)' } };
 renderer.xr.setFoveation(RES_MODES[GFX.res]?.fov ?? 0.25);
@@ -374,19 +374,110 @@ const chests = [];
     chests.push({ idx, x, z, g, lid, opened });
   }
 }
-function makeNPC(name, robe, x, z, faceAng) {
-  const g = new THREE.Group();
-  const body = new THREE.Mesh(new THREE.CylinderGeometry(0.28, 0.45, 1.3, 8), new THREE.MeshLambertMaterial({ color: robe })); body.position.y = 0.65; g.add(body);
-  const head = new THREE.Mesh(new THREE.SphereGeometry(0.22, 10, 8), new THREE.MeshLambertMaterial({ color: 0xe0b48a })); head.position.y = 1.5; g.add(head);
+// ---------------------------------------------------------------- humanoid rig (one skeleton shared by NPCs and enemies)
+// Metres at scale 1 (about 1.8 m tall), facing +Z. Limbs are pivots with the mesh hanging along -Y:
+// upper (hips pivot) -> chest, neck, head; shoulder -> upper arm -> elbow -> forearm + hand; hip -> thigh -> knee -> shin + foot.
+const HUM = { hip: 0.9, thigh: 0.43, shin: 0.42, uarm: 0.3, farm: 0.27, chestTop: 0.6, shoulderY: 0.55 };
+const limbGeo = (L, r0, r1) => { const g = new THREE.CylinderGeometry(r0, r1, L, 7); g.translate(0, -L / 2, 0); return g; };
+const HG = {
+  thigh: limbGeo(HUM.thigh, 0.075, 0.058), shin: limbGeo(HUM.shin, 0.058, 0.044),
+  uarm: limbGeo(HUM.uarm, 0.058, 0.048), farm: limbGeo(HUM.farm, 0.047, 0.038),
+  joint: new THREE.SphereGeometry(1, 8, 6), foot: new THREE.BoxGeometry(0.1, 0.07, 0.22),
+  chest: new THREE.CapsuleGeometry(0.15, 0.16, 3, 8), pelvis: new THREE.CapsuleGeometry(0.13, 0.04, 3, 8),
+  neck: new THREE.CylinderGeometry(0.05, 0.055, 0.12, 6), head: new THREE.SphereGeometry(0.12, 12, 10),
+  eye: new THREE.SphereGeometry(0.022, 6, 4), spike: new THREE.ConeGeometry(0.045, 0.2, 5),
+  hair: new THREE.SphereGeometry(0.128, 12, 6, 0, Math.PI * 2, 0, Math.PI / 2), beard: new THREE.ConeGeometry(0.075, 0.2, 7),
+};
+const _hm = (geo, mat, parent, x = 0, y = 0, z = 0) => { const m = new THREE.Mesh(geo, mat); m.position.set(x, y, z); parent.add(m); return m; };
+// o: { skin, top, legs, boots, eye, chestW, hunch }
+function makeHumanoid(o) {
+  const g = new THREE.Group(), cw = o.chestW || 1;
+  const upper = new THREE.Group(); upper.position.y = HUM.hip; g.add(upper);
+  const chest = _hm(HG.chest, o.top, upper, 0, 0.38); chest.scale.set(1.3 * cw, 1, 0.82);
+  const pelvis = _hm(HG.pelvis, o.legs, upper, 0, 0.06); pelvis.scale.set(1.25 * cw, 1, 0.85);
+  _hm(HG.neck, o.skin, upper, 0, 0.63);
+  const head = new THREE.Group(); head.position.y = 0.68; upper.add(head);
+  const skull = _hm(HG.head, o.skin, head, 0, 0.12);
+  if (o.eye) for (const sx of [-1, 1]) _hm(HG.eye, o.eye, skull, sx * 0.045, 0.01, 0.105);
+  const limb = (geo, mat, parent, x, y) => { const p = new THREE.Group(); p.position.set(x, y, 0); _hm(geo, mat, p); parent.add(p); return p; };
+  const arms = [], fore = [], hands = [], legs = [], shins = [];
+  for (const sx of [-1, 1]) {
+    const ua = limb(HG.uarm, o.top, upper, sx * (0.19 * cw + 0.05), HUM.shoulderY); ua.rotation.z = sx * 0.12;
+    _hm(HG.joint, o.top, ua).scale.setScalar(0.068);
+    const fa = limb(HG.farm, o.skin, ua, 0, -HUM.uarm); fa.rotation.x = -0.25;
+    const hand = new THREE.Group(); hand.position.y = -HUM.farm; fa.add(hand); _hm(HG.joint, o.skin, hand).scale.set(0.05, 0.065, 0.035);
+    const th = limb(HG.thigh, o.legs, g, sx * 0.1, HUM.hip);
+    const sn = limb(HG.shin, o.legs, th, 0, -HUM.thigh); _hm(HG.foot, o.boots || o.legs, sn, 0, -HUM.shin + 0.01, 0.05);
+    arms.push(ua); fore.push(fa); hands.push(hand); legs.push(th); shins.push(sn);
+  }
+  const hunch = o.hunch || 0; upper.rotation.x = hunch;
+  return { g, upper, chest, head, skull, arms, fore, hands, legs, shins, hunch };
+}
+// walk cycle: amp 0..1 stride, lf 0..1 attack lunge (both arms swing forward)
+function animateHumanoid(r, walk, amp, lf = 0) {
+  const sw = Math.sin(walk) * amp * 0.65, c = Math.cos(walk);
+  r.legs[0].rotation.x = -sw; r.legs[1].rotation.x = sw;
+  r.shins[0].rotation.x = 0.08 + Math.max(0, c) * amp * 1.1; r.shins[1].rotation.x = 0.08 + Math.max(0, -c) * amp * 1.1;
+  r.arms[0].rotation.x = sw * 0.8 - lf * 2.2; r.arms[1].rotation.x = -sw * 0.8 - lf * 2.2;
+  r.fore[0].rotation.x = r.fore[1].rotation.x = -0.25 - amp * 0.35 - lf * 0.5;
+}
+const wrapAng = a => Math.atan2(Math.sin(a), Math.cos(a));
+
+function makeNPC(name, look, x, z, faceAng) {
+  const r = makeHumanoid(look), g = r.g;
   const label = makeLabel(name); label.position.y = 2.25; g.add(label);
   const mark = makeLabel('!', '#ffd84a', 2.4); mark.position.y = 2.75; mark.visible = false; g.add(mark);
-  g.position.set(x, heightAt(x, z), z); g.rotation.y = faceAng; scene.add(g); addCollider(x, z, 0.5);
-  return { name, g, head, mark, x, z };
+  g.position.set(x, heightAt(x, z), z); g.rotation.y = faceAng; scene.add(g); addCollider(x, z, 0.45);
+  return { name, g, r, head: r.head, mark, x, z, face: faceAng, yaw: faceAng, talk: 0, t: Math.random() * 6 };
 }
-const elder = makeNPC('Elder Maren', 0x3b5ba8, 3.5, -4, 0.6);
-const staff = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.04, 1.9, 5), M.wood); staff.position.set(0.45, 0.95, 0.1); elder.g.add(staff);
-const smith = makeNPC('Smith Tovik', 0x7a3b1e, -6, 3, 2.2);
+const npcMat = c => new THREE.MeshLambertMaterial({ color: c });
+const SKIN = npcMat(0xe0b48a), BOOTS = npcMat(0x3a2a1a), NPC_EYE = new THREE.MeshBasicMaterial({ color: 0x1a1410 });
+const elder = makeNPC('Elder Maren', { skin: SKIN, top: npcMat(0x3b5ba8), legs: npcMat(0x2c3f78), boots: BOOTS, eye: NPC_EYE, chestW: 0.9 }, 3.5, -4, 0.6);
+{ // long robe, white hair and beard, staff in the hand
+  const robeMat = elder.r.chest.material, white = npcMat(0xe8e4dc);
+  const skirt = _hm(new THREE.CylinderGeometry(0.19, 0.33, 0.82, 10), robeMat, elder.r.upper, 0, -0.37);
+  const hair = _hm(HG.hair, white, elder.r.skull, 0, 0.012, -0.012); hair.rotation.x = -0.45;
+  const beard = _hm(HG.beard, white, elder.r.skull, 0, -0.12, 0.075); beard.rotation.x = Math.PI + 0.25;
+  elder.staff = _hm(new THREE.CylinderGeometry(0.03, 0.035, 1.9, 6), M.wood, elder.r.hands[1], 0, 0.05, 0.02);
+  _hm(new THREE.IcosahedronGeometry(0.07, 0), M.lamp || M.gold, elder.staff, 0, 0.98, 0);
+  elder.r.arms[1].rotation.x = -0.3; elder.r.fore[1].rotation.x = -0.95; elder.skirt = skirt;
+}
 const anvil = new THREE.Mesh(new THREE.BoxGeometry(0.8, 0.6, 0.4), M.stone); anvil.position.set(-6.2, VH + 0.3, 4.4); scene.add(anvil);
+const smith = makeNPC('Smith Tovik', { skin: SKIN, top: npcMat(0x7a3b1e), legs: npcMat(0x3b3026), boots: BOOTS, eye: NPC_EYE, chestW: 1.2 }, -6.15, 3.55, Math.atan2(-6.2 + 6.15, 4.4 - 3.55));
+{ // leather apron, dark beard, hammer
+  const leather = npcMat(0x4a2a14), brown = npcMat(0x3a2414);
+  const apron = _hm(new THREE.BoxGeometry(0.34, 0.62, 0.02), leather, smith.r.upper, 0, 0.18, 0.135); apron.rotation.x = -0.05;
+  const beard = _hm(HG.beard, brown, smith.r.skull, 0, -0.11, 0.08); beard.rotation.x = Math.PI + 0.3;
+  smith.hammer = new THREE.Group(); smith.hammer.position.set(0, -0.02, 0); smith.r.hands[1].add(smith.hammer);
+  _hm(new THREE.CylinderGeometry(0.018, 0.018, 0.42, 5), M.wood, smith.hammer, 0, 0, 0.15).rotation.x = Math.PI / 2;
+  _hm(new THREE.BoxGeometry(0.08, 0.08, 0.16), M.stone, smith.hammer, 0, 0, 0.36).rotation.y = Math.PI / 2;
+}
+const npcs = [elder, smith];
+// NPCs turn to face you up close, look at you with their heads, gesture while talking; the smith hammers at his anvil.
+function updateNPCs(dt) {
+  const h = headPos();
+  for (const n of npcs) {
+    n.t += dt; n.talk = Math.max(0, n.talk - dt);
+    const dx = h.x - n.x, dz = h.z - n.z, d = Math.hypot(dx, dz), toYou = Math.atan2(dx, dz);
+    const busy = n === smith && d > 3.2;
+    n.yaw += wrapAng((d < 3.2 || n.talk > 0 ? toYou : n.face) - n.yaw) * Math.min(1, dt * 3); n.g.rotation.y = n.yaw;
+    const look = d < 9 ? THREE.MathUtils.clamp(wrapAng(toYou - n.yaw), -1.1, 1.1) : 0;
+    n.head.rotation.y = lerp(n.head.rotation.y, busy ? 0 : look, Math.min(1, dt * 4));
+    n.head.rotation.x = lerp(n.head.rotation.x, busy ? 0.35 : n.talk > 0 ? Math.sin(n.t * 5) * 0.08 : -0.05, Math.min(1, dt * 4));
+    n.r.chest.scale.y = 1 + Math.sin(n.t * 1.7) * 0.025; // breathing
+    const r = n.r, gest = n.talk > 0 ? Math.sin(n.t * 3.1) : 0;
+    r.arms[0].rotation.x = -0.05 - (n.talk > 0 ? 0.6 + gest * 0.25 : 0); r.fore[0].rotation.x = -0.2 - (n.talk > 0 ? 0.7 : 0);
+    if (n === elder) { elder.staff.rotation.x = -(r.arms[1].rotation.x + r.fore[1].rotation.x); elder.staff.rotation.z = -r.arms[1].rotation.z; }
+    if (n === smith) {
+      if (busy) { // raise slowly, strike fast
+        const p = (n.t % 1.15) / 1.15, up = p < 0.78 ? smoothstep(0, 0.78, p) : 1 - (p - 0.78) / 0.22;
+        r.arms[1].rotation.x = -0.5 - up * 1.9; r.fore[1].rotation.x = -0.5 - up * 0.5; smith.hammer.rotation.x = 0.4 - up * 0.6;
+        if (n.lastP > 0.9 && p < 0.1 && d < 20) { burst(anvil.position.clone().add(_v2.set(0, 0.32, 0)), 0xffb040, 10, 2.5, 0.6); tone(900 + Math.random() * 200, 0.07, 'square', 0.04 * (1 - d / 20)); }
+        n.lastP = p;
+      } else { r.arms[1].rotation.x = lerp(r.arms[1].rotation.x, -0.15, dt * 4); r.fore[1].rotation.x = lerp(r.fore[1].rotation.x, -0.9, dt * 4); smith.hammer.rotation.x = 0.9; }
+    }
+  }
+}
 
 // ---------------------------------------------------------------- player gear
 const sword = new THREE.Group();
@@ -416,7 +507,7 @@ const toastPanel = makePanel(0.9, 0.3, 900, 300); toastPanel.mesh.position.set(0
 const promptPanel = makePanel(0.7, 0.09, 700, 90); promptPanel.mesh.position.set(0, -0.32, -1.2); promptPanel.mesh.visible = false; camera.add(promptPanel.mesh);
 const hurtFlash = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), new THREE.MeshBasicMaterial({ color: 0xff0000, transparent: true, opacity: 0, depthTest: false, fog: false }));
 hurtFlash.position.z = -0.12; hurtFlash.renderOrder = 1000; hurtFlash.visible = false; camera.add(hurtFlash);
-const wrist = makePanel(0.17, 0.12, 510, 360); wrist.mesh.position.set(0.05, 0.02, 0.1); wrist.mesh.rotation.set(0, Math.PI / 2, 0);
+const wrist = makePanel(0.17, 0.12, 510, 360); wrist.mesh.position.set(0.055, 0.13, 0.02); wrist.mesh.rotation.set(0, Math.PI / 2, 0); // inside of the left wrist (+Y runs toward the arm)
 
 // ---------------------------------------------------------------- XR controllers
 const hands = { left: null, right: null };
@@ -425,22 +516,235 @@ for (let i = 0; i < 2; i++) {
   const grip = renderer.xr.getControllerGrip(i); dolly.add(grip);
   grip.addEventListener('connected', e => {
     const src = e.data; if (!src || !src.handedness || src.handedness === 'none') return;
-    hands[src.handedness] = { grip, src, prev: [] };
-    if (src.handedness === 'right') { grip.add(sword); sword.position.set(0, 0, 0); sword.rotation.set(-0.35, 0, 0); }
+    const side = src.handedness, isHand = !!src.hand;
+    hands[side] = { grip, src, prev: [], isHand };
+    const model = playerHands[side]; grip.add(model.g); model.g.visible = !isHand; // tracked hands draw their own joints
+    if (side === 'right') { if (swordInHand) holdSword(); }
     else { grip.add(shield); grip.add(wrist.mesh); }
   });
-  grip.addEventListener('disconnected', () => { for (const k of ['left', 'right']) if (hands[k] && hands[k].grip === grip) hands[k] = null; });
+  grip.addEventListener('disconnected', () => { for (const k of ['left', 'right']) if (hands[k] && hands[k].grip === grip) { releaseGrab(k, true); hands[k] = null; } });
 }
 renderer.xr.addEventListener('sessionstart', () => {
   inVR = true; dolly.rotation.y = yaw; camera.rotation.set(0, 0, 0); startGame();
 });
 renderer.xr.addEventListener('sessionend', () => {
   inVR = false; yaw = dolly.rotation.y; dolly.rotation.y = 0; pitch = 0; camera.position.set(0, 1.6, 0);
+  releaseGrab('left', true); releaseGrab('right', true); swordInHand = true; scabbard.visible = false;
   camera.add(sword); restSword(); shield.removeFromParent(); wrist.mesh.removeFromParent();
   hands.left = hands.right = null;
 });
 function pulse(hand, intensity, ms) { try { hands[hand]?.src.gamepad?.hapticActuators?.[0]?.pulse(intensity, ms); } catch (e) { } }
 const btnEdge = (hand, i) => { const h = hands[hand]; const gp = h?.src.gamepad; if (!gp) return false; const now = !!gp.buttons[i]?.pressed; const was = !!h.prev[i]; h.prev[i] = now; return now && !was; };
+
+// ---------------------------------------------------------------- player hands
+// WebXR grip space: origin in the curled fingers, -Z along a held rod toward the thumb, the back of the right
+// hand faces +X (left hand -X), +Y runs toward the arm. Fingers are 3-segment chains that curl around the rod.
+// With controllers, finger curl comes from the analog grip/trigger and the capacitive touch sensors.
+const HAND_MAT = new THREE.MeshLambertMaterial({ color: 0x8a6646 }); // leather glove
+const FINGER_DEF = [ // index nearest the thumb
+  { z: -0.027, len: [0.042, 0.026, 0.02] }, { z: -0.008, len: [0.046, 0.029, 0.022] },
+  { z: 0.011, len: [0.043, 0.027, 0.021] }, { z: 0.028, len: [0.034, 0.021, 0.018] },
+];
+const _segGeo = {};
+const segGeo = (L, w = 0.019) => { const k = L + ':' + w; if (!_segGeo[k]) { const g = new THREE.BoxGeometry(w, L, w * 0.9); g.translate(0, -L / 2, 0); _segGeo[k] = g; } return _segGeo[k]; };
+function makePlayerHand(side) {
+  const ps = side === 'left' ? 1 : -1; // the palm faces +ps X
+  const g = new THREE.Group();
+  _hm(new THREE.BoxGeometry(0.026, 0.088, 0.08), HAND_MAT, g, -ps * 0.036, 0.044, 0);   // back of the hand / palm
+  _hm(new THREE.CylinderGeometry(0.036, 0.04, 0.06, 8), HAND_MAT, g, -ps * 0.03, 0.115, 0.004); // glove cuff
+  const chain = (root, lens, w) => { const segs = []; let parent = root; for (const L of lens) { const p = new THREE.Group(); _hm(segGeo(L, w), HAND_MAT, p); parent.add(p); segs.push(p); p.userData.next = L; parent = p; } segs.forEach((s, i) => { if (i) s.position.y = -lens[i - 1]; }); return segs; };
+  const fingers = FINGER_DEF.map(f => { const root = new THREE.Group(); root.position.set(-ps * 0.036, 0.002, f.z); g.add(root); return chain(root, f.len, 0.019); });
+  const thumbRoot = new THREE.Group(); thumbRoot.position.set(-ps * 0.024, 0.04, -0.038); thumbRoot.rotation.set(1.25, 0, ps * 0.35); g.add(thumbRoot);
+  const thumb = chain(thumbRoot, [0.04, 0.03, 0.024], 0.021);
+  return { g, ps, fingers, thumb, curl: [0.2, 0.2, 0.2, 0.2, 0.2] };
+}
+const playerHands = { left: makePlayerHand('left'), right: makePlayerHand('right') };
+// curls: [thumb, index, middle, ring, pinky], 0 = open, 1 = fist
+function poseHand(model, target, dt) {
+  const k = 1 - Math.exp(-dt * 22);
+  for (let i = 0; i < 5; i++) model.curl[i] = lerp(model.curl[i], target[i], k);
+  model.fingers.forEach((segs, f) => { const c = model.curl[f + 1]; segs[0].rotation.z = model.ps * c * 1.35; segs[1].rotation.z = model.ps * c * 1.55; segs[2].rotation.z = model.ps * c * 1.1; });
+  const t = model.curl[0]; model.thumb[0].rotation.z = model.ps * t * 0.55; model.thumb[1].rotation.z = model.ps * t * 0.7; model.thumb[2].rotation.z = model.ps * t * 0.5;
+}
+
+// tracked hands (Quest hand tracking): 25 joints per hand, drawn as knuckles + bones; fist = grab, pinch = talk / open
+const JOINTS = ['wrist', 'thumb-metacarpal', 'thumb-phalanx-proximal', 'thumb-phalanx-distal', 'thumb-tip'];
+for (const f of ['index', 'middle', 'ring', 'pinky']) JOINTS.push(`${f}-finger-metacarpal`, `${f}-finger-phalanx-proximal`, `${f}-finger-phalanx-intermediate`, `${f}-finger-phalanx-distal`, `${f}-finger-tip`);
+const BONES = []; // consecutive joints in each finger, plus the wrist to every metacarpal
+{ const chains = [[0, 1, 2, 3, 4]]; let i = 5; for (let f = 0; f < 4; f++) { chains.push([0, i, i + 1, i + 2, i + 3, i + 4]); i += 5; } for (const ch of chains) for (let j = 0; j < ch.length - 1; j++) BONES.push([ch[j], ch[j + 1]]); }
+const trackedHands = [];
+const geoBone = new THREE.CylinderGeometry(1, 1, 1, 6), geoKnuckle = new THREE.SphereGeometry(1, 8, 6);
+for (let i = 0; i < 2; i++) {
+  const hand = renderer.xr.getHand(i); dolly.add(hand);
+  const th = { hand, side: null, knuckles: [], bones: [], fist: false, pinch: false };
+  hand.addEventListener('connected', e => { th.side = e.data?.handedness || null; });
+  hand.addEventListener('disconnected', () => { th.side = null; });
+  trackedHands.push(th);
+}
+const _ja = new THREE.Vector3(), _jb = new THREE.Vector3(), _UP = new THREE.Vector3(0, 1, 0);
+function updateTrackedHands() {
+  for (const th of trackedHands) {
+    const J = th.hand.joints; if (!th.side || !J || !J['wrist']) { th.hand.visible = false; continue; }
+    th.hand.visible = true;
+    if (!th.knuckles.length) { // build meshes once the browser has created the joint objects
+      for (const name of JOINTS) { const m = new THREE.Mesh(geoKnuckle, HAND_MAT); th.hand.add(m); th.knuckles.push(m); }
+      for (let b = 0; b < BONES.length; b++) { const m = new THREE.Mesh(geoBone, HAND_MAT); th.hand.add(m); th.bones.push(m); }
+    }
+    JOINTS.forEach((name, i) => { const j = J[name], m = th.knuckles[i]; if (!j) { m.visible = false; return; } m.visible = j.visible !== false; m.position.copy(j.position); m.scale.setScalar(Math.max(0.006, (j.jointRadius || 0.008) * 1.05)); });
+    BONES.forEach(([a, b], i) => {
+      const ja = J[JOINTS[a]], jb = J[JOINTS[b]], m = th.bones[i]; if (!ja || !jb) { m.visible = false; return; }
+      _ja.copy(ja.position); _jb.copy(jb.position); const L = _ja.distanceTo(_jb); m.visible = L > 1e-4;
+      m.position.addVectors(_ja, _jb).multiplyScalar(0.5); m.quaternion.setFromUnitVectors(_UP, _jb.sub(_ja).normalize());
+      const r = Math.max(0.005, Math.min(ja.jointRadius || 0.008, jb.jointRadius || 0.008) * 0.85); m.scale.set(r, L, r);
+    });
+    // open/closed hand from fingertip-to-wrist distance, pinch from thumb tip to index tip (with hysteresis)
+    const w = J['wrist'].position; let avg = 0;
+    for (const f of ['index', 'middle', 'ring', 'pinky']) avg += J[`${f}-finger-tip`].position.distanceTo(w) / 4;
+    th.fist = th.fist ? avg < 0.13 : avg < 0.1;
+    const pd = J['thumb-tip'].position.distanceTo(J['index-finger-tip'].position);
+    th.pinch = th.pinch ? pd < 0.035 : pd < 0.018;
+  }
+}
+const trackedHand = side => trackedHands.find(t => t.side === side && t.hand.visible);
+
+// ---------------------------------------------------------------- sword scabbard (left hip) and grabbing
+let swordInHand = true;
+const scabbard = new THREE.Group(); scene.add(scabbard); scabbard.visible = false;
+{
+  const sheath = _hm(new THREE.BoxGeometry(0.075, 0.03, 0.86), M.dark, scabbard, 0, 0, -0.5);
+  _hm(new THREE.BoxGeometry(0.09, 0.04, 0.05), M.gold, scabbard, 0, 0, -0.08); _hm(new THREE.BoxGeometry(0.08, 0.035, 0.04), M.gold, scabbard, 0, 0, -0.92);
+}
+function holdSword() { const r = hands.right; if (!r) return; r.grip.add(sword); sword.position.set(0, 0, 0); sword.rotation.set(-0.35, 0, 0); swordInHand = true; }
+function sheatheSword() { scabbard.add(sword); sword.position.set(0, 0, 0.02); sword.rotation.set(0, 0, 0); swordInHand = false; sfx.block(); }
+const bodyPoint = (down, fwd, side, out) => { const h = headPos(), f = forward2D(); return out.set(h.x + f.x * fwd - f.z * side, h.y - down, h.z + f.z * fwd + f.x * side); };
+const _sheathPt = new THREE.Vector3(), _pocketPt = new THREE.Vector3(), _mouthPt = new THREE.Vector3();
+function updateScabbard() {
+  scabbard.visible = inVR; if (!inVR) return;
+  bodyPoint(0.78, 0.02, -0.2, _sheathPt); scabbard.position.copy(_sheathPt);
+  const f = forward2D(); scabbard.rotation.set(0, Math.atan2(-f.x, -f.z), 0, 'YXZ'); scabbard.rotateX(-1.25); // hilt up, blade down and back
+}
+
+// throwable stones scattered around the valley
+const stones = [];
+const STONE_HI = new THREE.MeshLambertMaterial({ color: 0x9a95a8, emissive: 0x3a3020, flatShading: true });
+{
+  const rnd = mulberry32(4242), geo = new THREE.IcosahedronGeometry(0.06, 0);
+  for (let i = 0; i < 46; i++) {
+    const a = rnd() * 6.283, d = i < 18 ? 6 + rnd() * 20 : 30 + rnd() * 160, x = Math.cos(a) * d, z = Math.sin(a) * d;
+    if (heightAt(x, z) < 0.5) continue;
+    const m = new THREE.Mesh(geo, M.stone); m.scale.set(0.8 + rnd() * 0.5, 0.7 + rnd() * 0.4, 0.8 + rnd() * 0.5); m.rotation.set(rnd() * 6, rnd() * 6, 0);
+    const s = { m, p: new THREE.Vector3(x, heightAt(x, z) + 0.05, z), v: new THREE.Vector3(), r: 0.06, rest: true, held: null, hitCd: 0 };
+    m.position.copy(s.p); scene.add(m); stones.push(s);
+  }
+}
+function updateStones(dt) {
+  for (const s of stones) {
+    s.hitCd -= dt;
+    if (s.held || s.rest) continue;
+    s.v.y -= 9.8 * dt; s.p.addScaledVector(s.v, dt);
+    const gy = heightAt(s.p.x, s.p.z) + s.r * 0.8;
+    if (s.p.y < gy) { s.p.y = gy; if (s.v.y < -1.5) tone(180 + Math.random() * 60, 0.05, 'triangle', 0.05); s.v.y = -s.v.y * 0.3; s.v.x *= 0.55; s.v.z *= 0.55; if (s.v.length() < 0.35) { s.rest = true; s.v.set(0, 0, 0); } }
+    const sp = s.v.length();
+    if (sp > 4 && s.hitCd <= 0) for (const e of enemies) {
+      if (e.dead) continue; const by = e.g.position.y;
+      if (Math.hypot(s.p.x - e.x, s.p.z - e.z) < e.rad + 0.08 && s.p.y > by && s.p.y < by + 1.85 * e.T.scale) {
+        const h = headPos(); hitEnemy(e, clamp(sp / 14, 0.25, 0.9), h.x, h.z, s.v.clone().multiplyScalar(0.6)); s.v.multiplyScalar(-0.25); s.hitCd = 0.3; break;
+      }
+    }
+    if (sp > 3) for (const rd of ragdolls) for (const pt of rd.P) if (pt.p.distanceTo(s.p) < pt.r + 0.08) { nudgeRagdoll(rd, s.v, 0.3); s.v.multiplyScalar(0.5); break; }
+    s.m.position.copy(s.p); s.m.rotation.x += sp * dt * 2;
+  }
+}
+function makePotionMesh() { const m = new THREE.Mesh(potionGeo, potionMat); const neck = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.05, 0.14, 6), M.lamp); neck.position.y = 0.18; m.add(neck); m.scale.setScalar(0.7); return m; }
+
+// grab state per hand: null or { kind: 'stone'|'rag'|'potion', ... }
+const grab = { left: null, right: null }, gripHeld = { left: false, right: false }, gripToggle = { left: false, right: false }, hover = { left: null, right: null };
+const handHist = { left: [], right: [] };
+const _hp = new THREE.Vector3(), _hv = new THREE.Vector3(), _q1 = new THREE.Quaternion();
+function handVel(side, out) { // average over the last ~80 ms, with a little throw assist
+  const H = handHist[side]; out.set(0, 0, 0); if (H.length < 2) return out;
+  const a = H[H.length - 1]; let b = H[0]; for (let i = H.length - 2; i >= 0; i--) { b = H[i]; if (a.t - b.t > 0.08) break; }
+  const dtt = a.t - b.t; if (dtt > 1e-3) out.subVectors(a.p, b.p).divideScalar(dtt).multiplyScalar(1.25);
+  return out.clampLength(0, 25);
+}
+// what this hand could grab right now (nearest first)
+function grabCandidate(side, p) {
+  let best = null, bd = 1e9; const consider = (d, c) => { if (d < bd) { bd = d; best = c; } };
+  for (const s of stones) if (!s.held) { const d = s.p.distanceTo(p) - s.r; if (d < 0.12) consider(d, { kind: 'stone', s }); }
+  for (const pk of pickups) { const d = pk.m.position.distanceTo(p) - 0.12; if (d < 0.12) consider(d, { kind: 'pickup', pk }); }
+  for (const rd of ragdolls) if (rd.life < RAG_LIFE - 1.3) rd.P.forEach((pt, i) => { const d = pt.p.distanceTo(p) - pt.r; if (d < 0.1) consider(d + 0.02, { kind: 'rag', rd, i }); });
+  for (const c of chests) if (!c.opened) { const d = _v3.set(c.x, c.g.position.y + 0.55, c.z).distanceTo(p) - 0.35; if (d < 0.12) consider(d + 0.03, { kind: 'chest', c }); }
+  if (S.potions > 0 && bodyPoint(0.36, 0.12, 0, _pocketPt).distanceTo(p) < 0.2) consider(0.15, { kind: 'pocket' });
+  return best;
+}
+function tryGrab(side, p) {
+  const c = grabCandidate(side, p); if (!c) return false;
+  const other = side === 'left' ? 'right' : 'left';
+  if (c.kind === 'stone') { if (grab[other]?.s === c.s) releaseGrab(other, true); c.s.held = side; c.s.rest = false; grab[side] = { kind: 'stone', s: c.s }; }
+  else if (c.kind === 'rag') { if (grab[other]?.rd === c.rd && grab[other].i === c.i) releaseGrab(other, true); c.rd.pins = c.rd.pins || {}; c.rd.pins[side] = { i: c.i, t: c.rd.P[c.i].p.clone() }; grab[side] = { kind: 'rag', rd: c.rd, i: c.i }; }
+  else if (c.kind === 'chest') { openChest(c.c); pulse(side, 0.6, 60); return true; }
+  else if (c.kind === 'pocket') { S.potions--; const m = makePotionMesh(); scene.add(m); grab[side] = { kind: 'potion', m }; sfx.pickup(); }
+  else if (c.kind === 'pickup') { scene.remove(c.pk.m); pickups.splice(pickups.indexOf(c.pk), 1); const m = makePotionMesh(); scene.add(m); grab[side] = { kind: 'potion', m }; sfx.pickup(); }
+  pulse(side, 0.5, 40); return true;
+}
+function releaseGrab(side, quiet) {
+  const gb = grab[side]; if (!gb) return; grab[side] = null;
+  const v = handVel(side, _hv);
+  if (gb.kind === 'stone') { gb.s.held = null; gb.s.rest = false; gb.s.v.copy(quiet ? _v3.set(0, 0, 0) : v); }
+  else if (gb.kind === 'rag') {
+    const rd = gb.rd; if (rd.pins) delete rd.pins[side];
+    if (!quiet && ragdolls.includes(rd)) { for (const pt of rd.P) pt.o.addScaledVector(v, -RAG_STEP * 0.35); rd.P[gb.i].o.copy(rd.P[gb.i].p).addScaledVector(v, -RAG_STEP); }
+  }
+  else if (gb.kind === 'potion') { scene.remove(gb.m); S.potions++; if (!quiet) { sfx.coin(); toast('Potion stowed.', 1.2); } } // let go anywhere: it goes back in your pack
+}
+function updateHands(dt) {
+  updateTrackedHands();
+  if (!inVR) return;
+  updateScabbard();
+  const now = performance.now() / 1000;
+  for (const side of ['left', 'right']) {
+    const h = hands[side]; if (!h) continue;
+    const p = h.grip.getWorldPosition(_hp).clone();
+    const H = handHist[side]; H.push({ p, t: now }); if (H.length > 10) H.shift();
+    // grip input: analog squeeze on controllers, a closed fist with tracked hands
+    const th = h.isHand ? trackedHand(side) : null, gp = h.src.gamepad;
+    const squeeze = th ? (th.fist ? 1 : 0) : (gp?.buttons[1]?.value ?? 0);
+    const was = gripHeld[side]; gripHeld[side] = was ? squeeze > 0.35 : squeeze > 0.6;
+    const pressEdge = gripHeld[side] && !was, releaseEdge = !gripHeld[side] && was;
+    if (th) { if (th.pinch && !th.pinchWas && side === 'right') interactQueued = true; th.pinchWas = th.pinch; }
+    const toggleMode = GFX.grip === 'toggle';
+    if (side === 'right' && swordInHand) { // sword is sticky: grip near the left hip puts it away
+      if (pressEdge && p.distanceTo(_sheathPt) < 0.3) { sheatheSword(); pulse('right', 0.7, 50); }
+    } else if (grab[side]) {
+      if ((toggleMode && pressEdge) || (!toggleMode && releaseEdge)) releaseGrab(side, false);
+    } else if (pressEdge) {
+      if (!tryGrab(side, p) && side === 'right') { holdSword(); sfx.swing(); pulse('right', 0.7, 50); } // nothing to grab: draw the sword
+    }
+    // hover feedback
+    const cand = (!grab[side] && !(side === 'right' && swordInHand)) ? grabCandidate(side, p) : null;
+    const key = cand ? (cand.s || cand.pk || cand.c || (cand.rd ? cand.rd.P[cand.i] : 'pocket')) : null;
+    if (key !== hover[side]) { if (stones.includes(hover[side])) hover[side].m.material = M.stone; if (key) pulse(side, 0.15, 15); hover[side] = key; if (cand?.kind === 'stone') cand.s.m.material = STONE_HI; }
+    // carry the held thing
+    const gb = grab[side];
+    if (gb?.kind === 'stone') { gb.s.p.copy(p); gb.s.m.position.copy(p); }
+    else if (gb?.kind === 'rag') { if (!ragdolls.includes(gb.rd)) grab[side] = null; else { gb.rd.pins[side].t.copy(p); gb.rd.life = Math.min(gb.rd.life, 1); } }
+    else if (gb?.kind === 'potion') {
+      gb.m.position.copy(p); gb.m.quaternion.copy(h.grip.getWorldQuaternion(_q1)); gb.m.rotateX(-Math.PI / 2);
+      if (p.distanceTo(bodyPoint(0.08, 0.07, 0, _mouthPt)) < 0.15) { // drink by bringing it to your mouth
+        if (S.hp >= maxHp()) { if (!gb.warned) { toast('You are already at full health.', 1.5); gb.warned = true; } }
+        else { scene.remove(gb.m); grab[side] = null; S.hp = Math.min(maxHp(), S.hp + 55); sfx.drink(); burst(p, 0xff5577, 16, 1.2, 1); pulse(side, 0.8, 120); }
+      }
+    }
+    // finger pose
+    if (!h.isHand) {
+      const trig = gp?.buttons[0]?.value ?? 0, trigTouch = gp?.buttons[0]?.touched ? 0.25 : 0;
+      const thumbTouch = [3, 4, 5, 6].some(i => gp?.buttons[i]?.touched) ? 0.85 : 0.15;
+      const holding = !!grab[side] || (side === 'right' && swordInHand);
+      const sq = holding ? Math.max(0.85, squeeze) : squeeze, ix = holding ? Math.max(0.75, trig) : Math.max(trig, trigTouch);
+      poseHand(playerHands[side], [holding ? 0.8 : thumbTouch, ix, sq, sq, sq], dt);
+    }
+  }
+}
 
 // ---------------------------------------------------------------- player helpers
 const _head = new THREE.Vector3();
@@ -552,42 +856,40 @@ function drinkPotion() {
 
 // ---------------------------------------------------------------- enemies
 const ENEMY_TYPES = {
-  gloom: { name: 'Gloomling', hp: 30, dmg: 7, speed: 2.3, xp: 14, gold: [2, 6], color: 0x4b2a6b, scale: 1 },
-  thorn: { name: 'Thornback', hp: 80, dmg: 13, speed: 1.9, xp: 32, gold: [6, 14], color: 0x56502a, scale: 1.55 },
-  king: { name: 'Hollow King', hp: 520, dmg: 22, speed: 2.7, xp: 300, gold: [150, 150], color: 0x1c1028, scale: 2.8, boss: true },
+  gloom: { name: 'Gloomling', hp: 30, dmg: 7, speed: 2.3, xp: 14, gold: [2, 6], color: 0x4b2a6b, scale: 0.8, chestW: 0.85, hunch: 0.45 },
+  thorn: { name: 'Thornback', hp: 80, dmg: 13, speed: 1.9, xp: 32, gold: [6, 14], color: 0x56502a, scale: 1.2, chestW: 1.4, hunch: 0.25 },
+  king: { name: 'Hollow King', hp: 520, dmg: 22, speed: 2.7, xp: 300, gold: [150, 150], color: 0x1c1028, scale: 1.75, chestW: 1.2, hunch: 0.08, boss: true },
 };
-const geoBlob = new THREE.IcosahedronGeometry(0.42, 1), geoEye = new THREE.SphereGeometry(0.07, 6, 4), geoSpike = new THREE.ConeGeometry(0.09, 0.32, 5);
-const LIMB = 0.42;
-const geoLimb = new THREE.CylinderGeometry(0.075, 0.06, LIMB, 6); geoLimb.translate(0, -LIMB / 2, 0);
-const geoNub = new THREE.SphereGeometry(0.1, 6, 4);
 const matEye = new THREE.MeshBasicMaterial({ color: 0xffd23a }), matEyeBoss = new THREE.MeshBasicMaterial({ color: 0xff3020 });
+const ENEMY_LEGS = { gloom: new THREE.MeshLambertMaterial({ color: 0x241a28, flatShading: true }), thorn: new THREE.MeshLambertMaterial({ color: 0x3d3320, flatShading: true }), king: new THREE.MeshLambertMaterial({ color: 0x15101c, flatShading: true }) };
 const barGeo = new THREE.PlaneGeometry(1, 0.09); barGeo.translate(0.5, 0, 0);
 const barBg = new THREE.MeshBasicMaterial({ color: 0x220000, fog: false }), barFg = new THREE.MeshBasicMaterial({ color: 0xff4040, fog: false });
 const enemies = [];
-function makeLimb(mat, x, y, parent) {
-  const pivot = new THREE.Group(); pivot.position.set(x, y, 0);
-  pivot.add(new THREE.Mesh(geoLimb, mat));
-  const nub = new THREE.Mesh(geoNub, mat); nub.position.y = -LIMB; pivot.add(nub);
-  parent.add(pivot); return pivot;
-}
 function spawnEnemy(key, x, z) {
-  const T = ENEMY_TYPES[key], g = new THREE.Group();
+  const T = ENEMY_TYPES[key];
   const mat = new THREE.MeshLambertMaterial({ color: T.color, flatShading: true, emissive: 0x000000 });
-  const upper = new THREE.Group(); upper.position.y = 0.44; g.add(upper); // pivots at the hips (for flinching)
-  const body = new THREE.Mesh(geoBlob, mat); body.position.y = 0.34; upper.add(body);
-  for (const sx of [-1, 1]) { const e = new THREE.Mesh(geoEye, T.boss ? matEyeBoss : matEye); e.position.set(sx * 0.15, 0.1, 0.36); body.add(e); }
-  if (key !== 'gloom') for (let i = 0; i < (T.boss ? 7 : 5); i++) { const s = new THREE.Mesh(geoSpike, T.boss ? M.gold : M.wood); const a = i / (T.boss ? 7 : 5) * 6.28; s.position.set(Math.cos(a) * 0.2, 0.36, Math.sin(a) * 0.2); s.rotation.set(Math.sin(a) * 0.4, 0, -Math.cos(a) * 0.4); body.add(s); }
-  const arms = [makeLimb(mat, -0.38, 0.44, upper), makeLimb(mat, 0.38, 0.44, upper)];
-  const legs = [makeLimb(mat, -0.17, 0.44, g), makeLimb(mat, 0.17, 0.44, g)];
-  arms[0].rotation.z = -0.25; arms[1].rotation.z = 0.25;
+  const r = makeHumanoid({ skin: mat, top: mat, legs: ENEMY_LEGS[key], eye: T.boss ? matEyeBoss : matEye, chestW: T.chestW, hunch: T.hunch });
+  const g = r.g;
+  if (key === 'gloom') for (const sx of [-1, 1]) { const ear = _hm(HG.spike, mat, r.skull, sx * 0.11, 0.04, -0.01); ear.rotation.z = -sx * 1.2; ear.scale.set(0.8, 0.9, 0.8); }
+  if (key === 'thorn') { // bark spikes down the back and on the shoulders
+    for (let i = 0; i < 6; i++) { const s = _hm(HG.spike, M.wood, r.upper, ((i % 3) - 1) * 0.12, 0.22 + Math.floor(i / 3) * 0.24, -0.11); s.rotation.x = -Math.PI / 2 - 0.3; }
+    for (const a of r.arms) _hm(HG.spike, M.wood, a, 0, 0.08, 0);
+  }
+  if (key === 'king') { // spiked crown and gold pauldrons
+    for (let i = 0; i < 7; i++) { const a = i / 7 * 6.283, s = _hm(HG.spike, M.gold, r.skull, Math.cos(a) * 0.09, 0.1, Math.sin(a) * 0.09); s.rotation.set(Math.sin(a) * 0.3, 0, -Math.cos(a) * 0.3); s.scale.setScalar(0.9); }
+    for (const a of r.arms) _hm(HG.joint, M.gold, a, 0, 0.02, 0).scale.set(0.11, 0.08, 0.12);
+  }
   const bar = new THREE.Group(), bg = new THREE.Mesh(barGeo, barBg), fg = new THREE.Mesh(barGeo, barFg);
-  bg.position.x = -0.5; fg.position.set(-0.5, 0, 0.002); bar.add(bg, fg); bar.position.y = 1.45; bar.visible = false; g.add(bar);
+  bg.position.x = -0.5; fg.position.set(-0.5, 0, 0.002); bar.add(bg, fg); bar.position.y = 2.1; bar.visible = false; g.add(bar);
   g.scale.setScalar(T.scale);
   const lv = 1 + 0.14 * (S.level - 1), nightMul = isNight() ? 1.2 : 1;
-  const e = { key, T, g, upper, body, arms, legs, mat, bar, fg, hp: T.hp * lv * nightMul, maxHp: T.hp * lv * nightMul, dmg: T.dmg * lv, x, z, vx: 0, vz: 0, atkCd: 1.2, hitCd: 0, flash: 0, lunge: 0, walk: Math.random() * 6, tilt: 0, tiltV: 0, phase: Math.random() * 6, wAng: Math.random() * 6.28, wT: 0, aggro: false, dead: false, rad: 0.45 * T.scale };
+  const e = { key, T, g, rig: r, upper: r.upper, mat, bar, fg, hp: T.hp * lv * nightMul, maxHp: T.hp * lv * nightMul, dmg: T.dmg * lv, x, z, vx: 0, vz: 0, atkCd: 1.2, hitCd: 0, flash: 0, lunge: 0, walk: Math.random() * 6, tilt: 0, tiltV: 0, phase: Math.random() * 6, wAng: Math.random() * 6.28, wT: 0, aggro: false, dead: false, rad: 0.4 * T.scale * T.chestW };
   g.position.set(x, heightAt(x, z), z); scene.add(g); enemies.push(e); return e;
 }
-function enemyCenter(e, out) { return out.set(e.x, e.g.position.y + 0.78 * e.T.scale, e.z); }
+function enemyCenter(e, out) { return out.set(e.x, e.g.position.y + 1.1 * e.T.scale, e.z); }
+// closest distance from a blade segment to the enemy's body (sampled at legs, chest and head height)
+function enemyBladeDist(e, a, b) { let m = 1e9; for (const f of [0.5, 1.05, 1.55]) m = Math.min(m, distPointSeg(_ebd.set(e.x, e.g.position.y + f * e.T.scale, e.z), a, b)); return m; }
+const _ebd = new THREE.Vector3();
 // impulse: world-space velocity (m/s) of the blow, used for knockback, flinch and the death ragdoll
 function hitEnemy(e, mult, fromX, fromZ, impulse) {
   if (e.dead || e.hitCd > 0) return false;
@@ -615,36 +917,42 @@ function killEnemy(e, imp) {
 }
 
 // ---------------------------------------------------------------- ragdolls (Verlet points + distance constraints)
-// Points: 0 T (top of torso), 1 B (bottom), 2 F (front), 3/4 shoulders, 5/6 hips, 7/8 hands, 9/10 feet.
-// Points 0-6 are tied together rigidly (the torso); arms and legs hang from them on single links.
+// Humanoid skeleton points: 0 head, 1 T (chest top), 2 B (pelvis), 3 F (chest front), 4/5 shoulders, 6/7 hips,
+// 8/9 elbows, 10/11 hands, 12/13 knees, 14/15 feet. Points 0-7 are tied rigidly (head + torso);
+// upper arm, forearm, thigh and shin are single links, with minimum distances acting as joint limits.
 const ragdolls = []; const RAG_MAX = 8, RAG_LIFE = 7, RAG_STEP = 1 / 60;
 const _rx = new THREE.Vector3(), _ry = new THREE.Vector3(), _rz = new THREE.Vector3(), _rm = new THREE.Matrix4(), DOWN = new THREE.Vector3(0, -1, 0);
 function makeRagdoll(e, imp) {
-  e.g.updateMatrixWorld(true);
+  const r = e.rig; e.g.updateMatrixWorld(true);
   const s = e.T.scale, P = [];
-  const add = (v, r) => P.push({ p: v, o: v.clone(), r: r * s, gy: 0 });
-  add(e.body.localToWorld(new THREE.Vector3(0, 0.3, 0)), 0.14);
-  add(e.body.localToWorld(new THREE.Vector3(0, -0.3, 0)), 0.14);
-  add(e.body.localToWorld(new THREE.Vector3(0, 0, 0.3)), 0.14);
-  for (const a of e.arms) add(a.getWorldPosition(new THREE.Vector3()), 0.08);
-  for (const l of e.legs) add(l.getWorldPosition(new THREE.Vector3()), 0.08);
-  for (const a of e.arms) add(a.localToWorld(new THREE.Vector3(0, -LIMB, 0)), 0.1);
-  for (const l of e.legs) add(l.localToWorld(new THREE.Vector3(0, -LIMB, 0)), 0.1);
-  const C = [], link = (a, b, k = 1) => C.push([a, b, P[a].p.distanceTo(P[b].p) * k]);
-  for (let a = 0; a < 7; a++) for (let b = a + 1; b < 7; b++) link(a, b);
-  link(3, 7); link(4, 8); link(5, 9); link(6, 10);
-  const soft = []; // minimum distances so limbs can't fold through the torso
-  for (const [a, b] of [[7, 1], [8, 1], [7, 2], [8, 2], [9, 0], [10, 0], [9, 10], [7, 8]]) soft.push([a, b, P[a].p.distanceTo(P[b].p) * 0.55]);
+  const W = (o, x = 0, y = 0, z = 0) => o.localToWorld(new THREE.Vector3(x, y, z));
+  const add = (v, rad) => P.push({ p: v, o: v.clone(), r: rad * s, gy: 0 });
+  add(W(r.skull), 0.12); add(W(r.upper, 0, HUM.chestTop, 0), 0.11); add(W(r.upper), 0.12); add(W(r.upper, 0, 0.35, 0.1), 0.05);
+  for (const a of r.arms) add(W(a), 0.07);
+  for (const l of r.legs) add(W(l), 0.08);
+  for (const f of r.fore) add(W(f), 0.055);
+  for (const f of r.fore) add(W(f, 0, -HUM.farm, 0), 0.05);
+  for (const n of r.shins) add(W(n), 0.065);
+  for (const n of r.shins) add(W(n, 0, -HUM.shin, 0), 0.055);
+  const C = [], link = (a, b) => C.push([a, b, P[a].p.distanceTo(P[b].p)]);
+  for (let a = 0; a < 8; a++) for (let b = a + 1; b < 8; b++) link(a, b);
+  const limbIdx = [[4, 8], [5, 9], [8, 10], [9, 11], [6, 12], [7, 13], [12, 14], [13, 15]];
+  for (const [a, b] of limbIdx) link(a, b);
+  const soft = [], lim = (a, b, f) => soft.push([a, b, P[a].p.distanceTo(P[b].p) * f]);
+  lim(4, 10, 0.5); lim(5, 11, 0.5); lim(6, 14, 0.6); lim(7, 15, 0.6);       // elbows and knees can't fold flat
+  for (const hnd of [10, 11]) { lim(hnd, 2, 0.5); lim(hnd, 3, 0.4); }        // hands stay outside the torso
+  for (const ft of [14, 15]) { lim(ft, 1, 0.6); lim(ft, 3, 0.55); }          // feet stay below the chest
+  lim(8, 3, 0.5); lim(9, 3, 0.5); lim(12, 13, 0.6); lim(14, 15, 0.45); lim(10, 11, 0.3); lim(0, 10, 0.4); lim(0, 11, 0.4);
   const k = e.T.boss ? 0.35 : 1;
   for (const pt of P) {
     _rx.copy(imp).multiplyScalar(0.6 * k); _rx.x += (Math.random() - 0.5) * 0.8; _rx.y += 1.8 * k + Math.random() * 0.6; _rx.z += (Math.random() - 0.5) * 0.8;
     pt.o.addScaledVector(_rx, -RAG_STEP);
   }
-  P[0].o.addScaledVector(imp, -RAG_STEP * 0.6 * k); // the top gets extra so the body tumbles
-  const limbs = [...e.arms, ...e.legs];
-  for (const m of [e.body, ...limbs]) { m.removeFromParent(); m.scale.setScalar(s); scene.add(m); }
+  P[0].o.addScaledVector(imp, -RAG_STEP * 0.6 * k); P[1].o.addScaledVector(imp, -RAG_STEP * 0.3 * k); // the top gets extra so the body tumbles
+  const limbs = [r.arms[0], r.arms[1], r.fore[0], r.fore[1], r.legs[0], r.legs[1], r.shins[0], r.shins[1]];
+  for (const m of [...r.fore, ...r.shins, ...r.arms, ...r.legs, r.upper]) { m.removeFromParent(); m.scale.setScalar(s); m.rotation.set(0, 0, 0); scene.add(m); }
   e.mat.emissive.setScalar(0);
-  const rd = { P, C, soft, body: e.body, limbs, limbIdx: [[3, 7], [4, 8], [5, 9], [6, 10]], mat: e.mat, life: 0, acc: 0, s, pushCd: 0 };
+  const rd = { P, C, soft, body: r.upper, limbs, limbIdx, mat: e.mat, life: 0, acc: 0, s, pushCd: 0 };
   ragdolls.push(rd);
   while (ragdolls.length > RAG_MAX) removeRagdoll(ragdolls[0]);
   poseRagdoll(rd);
@@ -664,20 +972,24 @@ function stepRagdoll(rd, h) {
     pt.o.copy(pt.p); pt.p.x += vx; pt.p.y += vy + g; pt.p.z += vz;
     pt.gy = heightAt(pt.p.x, pt.p.z) + pt.r;
   }
+  const pins = rd.pins ? Object.values(rd.pins) : [];
+  const pin = () => { for (const q of pins) rd.P[q.i].p.copy(q.t); }; // points held in a hand follow it exactly
+  pin();
   for (let it = 0; it < 6; it++) {
     for (const c of rd.C) satisfy(rd.P[c[0]].p, rd.P[c[1]].p, c[2], false);
     for (const c of rd.soft) satisfy(rd.P[c[0]].p, rd.P[c[1]].p, c[2], true);
     for (const pt of rd.P) if (pt.p.y < pt.gy) pt.p.y = pt.gy;
+    pin();
   }
   for (const pt of rd.P) if (pt.p.y <= pt.gy + 0.002) { // ground friction
     pt.o.x = lerp(pt.o.x, pt.p.x, 0.25); pt.o.z = lerp(pt.o.z, pt.p.z, 0.25); if (pt.o.y < pt.p.y) pt.o.y = lerp(pt.o.y, pt.p.y, 0.6);
   }
 }
 function poseRagdoll(rd) {
-  const P = rd.P, T = P[0].p, B = P[1].p, F = P[2].p;
-  rd.body.position.addVectors(T, B).multiplyScalar(0.5);
+  const P = rd.P, T = P[1].p, B = P[2].p, F = P[3].p;
+  rd.body.position.copy(B); // the torso group's origin is the pelvis point; its +Y runs to the chest top
   _ry.subVectors(T, B).normalize();
-  _rz.subVectors(F, rd.body.position); _rz.addScaledVector(_ry, -_rz.dot(_ry)).normalize();
+  _rz.subVectors(F, B); _rz.addScaledVector(_ry, -_rz.dot(_ry)).normalize();
   _rx.crossVectors(_ry, _rz);
   _rm.makeBasis(_rx, _ry, _rz); rd.body.quaternion.setFromRotationMatrix(_rm);
   rd.limbs.forEach((l, i) => { const [a, b] = rd.limbIdx[i]; l.position.copy(P[a].p); _rx.subVectors(P[b].p, P[a].p).normalize(); l.quaternion.setFromUnitVectors(DOWN, _rx); });
@@ -751,13 +1063,11 @@ function updateEnemies(dt) {
     e.g.position.set(e.x, heightAt(e.x, e.z), e.z);
     // walk cycle, attack swing, and a springy flinch when hit
     const moving = Math.hypot(mx, mz) / e.T.scale; e.walk += dt * (2 + moving * 3.5);
-    const sw = Math.sin(e.walk) * Math.min(1, moving / 1.2) * 0.7;
     e.lunge = Math.max(0, e.lunge - dt); const lf = Math.sin(e.lunge / 0.3 * Math.PI);
-    e.legs[0].rotation.x = sw; e.legs[1].rotation.x = -sw;
-    e.arms[0].rotation.x = -sw * 0.8 - lf * 2.2; e.arms[1].rotation.x = sw * 0.8 - lf * 2.2;
+    animateHumanoid(e.rig, e.walk, Math.min(1, moving / 1.2), lf);
     e.tiltV += (-70 * e.tilt - 9 * e.tiltV) * dt; e.tilt += e.tiltV * dt;
-    e.upper.rotation.x = e.tilt + lf * 0.35;
-    e.body.scale.set(1, 1 + Math.sin(time * 8 + e.phase) * 0.06, 1);
+    e.upper.rotation.x = e.rig.hunch + e.tilt + lf * 0.35;
+    e.rig.chest.scale.y = 1 + Math.sin(time * 6 + e.phase) * 0.04;
     e.flash = Math.max(0, e.flash - dt); e.mat.emissive.setScalar(e.flash > 0 ? 0.8 : 0);
     if (e.hp < e.maxHp) { e.bar.visible = true; e.fg.scale.x = Math.max(0.001, e.hp / e.maxHp); e.bar.lookAt(h); }
   }
@@ -801,8 +1111,8 @@ const ELDER_LINES = {
 };
 function interactables() {
   const list = [
-    { x: elder.x, z: elder.z, r: 3.2, label: 'Talk to Elder Maren', act: () => { toast(ELDER_LINES[S.stage](), 9); save(); } },
-    { x: smith.x, z: smith.z, r: 3.2, label: 'Talk to Smith Tovik', act: smithTalk },
+    { x: elder.x, z: elder.z, r: 3.2, label: 'Talk to Elder Maren', act: () => { elder.talk = 5; toast(ELDER_LINES[S.stage](), 9); save(); } },
+    { x: smith.x, z: smith.z, r: 3.2, label: 'Talk to Smith Tovik', act: () => { smith.talk = 4; smithTalk(); } },
   ];
   for (const c of chests) if (!c.opened) list.push({ x: c.x, z: c.z, r: 2.4, label: 'Open chest', act: () => openChest(c) });
   return list;
@@ -848,7 +1158,7 @@ function updateDesktopSword(dt) {
 }
 const prevTip = new THREE.Vector3(); let havePrev = false, tipSpeed = 0, whooshCd = 0;
 function updateVRSword(dt) {
-  if (!inVR || !hands.right) { havePrev = false; return; }
+  if (!inVR || !hands.right || !swordInHand) { havePrev = false; return; }
   sword.updateWorldMatrix(true, false);
   const tipW = sword.localToWorld(_v1.copy(TIP)).clone(), hiltW = sword.localToWorld(_v2.copy(HILT)).clone();
   const tipL = dolly.worldToLocal(tipW.clone());
@@ -860,14 +1170,14 @@ function updateVRSword(dt) {
   sword.userData.edge.material.color.setHex(tipSpeed > 1.8 ? 0xffd27a : 0xff7a1a);
   if (tipSpeed < 1.8) return;
   const h = headPos(), mult = clamp(tipSpeed / 4.5, 0.6, 1.6);
-  for (const e of enemies) { if (e.dead || e.hitCd > 0) continue; if (distPointSeg(enemyCenter(e, _ec), hiltW, tipW) < e.rad + 0.1) hitEnemy(e, mult, h.x, h.z, velW.clone().clampLength(0, 12)); }
+  for (const e of enemies) { if (e.dead || e.hitCd > 0) continue; if (enemyBladeDist(e, hiltW, tipW) < e.rad + 0.1) hitEnemy(e, mult, h.x, h.z, velW.clone().clampLength(0, 12)); }
 }
-let snapReady = true;
+let snapReady = true, runLatch = false;
 function updateMovement(dt) {
   let mx = 0, mz = 0, run = false, turn = 0;
   if (inVR) {
     const L = hands.left?.src.gamepad, R = hands.right?.src.gamepad;
-    if (L) { const ax = L.axes.length >= 4 ? 2 : 0; mx = L.axes[ax] || 0; mz = L.axes[ax + 1] || 0; run = !!L.buttons[1]?.pressed; }
+    if (L) { const ax = L.axes.length >= 4 ? 2 : 0; mx = L.axes[ax] || 0; mz = L.axes[ax + 1] || 0; if (btnEdge('left', 3)) runLatch = true; if (Math.hypot(mx, mz) < 0.2) runLatch = false; run = runLatch; } // click the left stick to sprint
     if (R) { const ax = R.axes.length >= 4 ? 2 : 0; turn = R.axes[ax] || 0; }
     if (btnEdge('right', 4)) interactQueued = true;
     if (btnEdge('right', 5) || btnEdge('left', 4)) potionQueued = true;
@@ -928,6 +1238,7 @@ vrBtn.onclick = () => { const s = renderer.xr.getSession(); if (s) s.end(); else
 const resSel = $('gfxRes'), hzSel = $('gfxHz');
 if (resSel && hzSel) {
   resSel.value = GFX.res; hzSel.value = String(GFX.hz);
+  const gripSel = $('gfxGrip'); if (gripSel) { gripSel.value = GFX.grip; gripSel.onchange = () => { GFX.grip = gripSel.value; try { localStorage.setItem(GFX_KEY, JSON.stringify(GFX)); } catch (e) { } }; }
   const store = () => { GFX.res = resSel.value; GFX.hz = +hzSel.value; try { localStorage.setItem(GFX_KEY, JSON.stringify(GFX)); } catch (e) { } };
   resSel.onchange = store; hzSel.onchange = store;
 }
@@ -937,7 +1248,7 @@ const clock = new THREE.Clock(); let uiT = 0, saveT = 0;
 renderer.setAnimationLoop(() => {
   const rawDt = clock.getDelta(); const dt = Math.min(rawDt, 0.05); time += dt; if (rawDt > 0) fpsNow = lerp(fpsNow, 1 / rawDt, 0.05);
   if (running) {
-    updateMovement(dt); updateDesktopSword(dt); updateVRSword(dt); updateSpawns(dt); updateEnemies(dt); updateRagdolls(dt); updatePickups(dt);
+    updateMovement(dt); updateDesktopSword(dt); updateVRSword(dt); updateSpawns(dt); updateEnemies(dt); updateHands(dt); updateRagdolls(dt); updateStones(dt); updatePickups(dt); updateNPCs(dt);
     if (interactQueued) { interactQueued = false; const h = headPos(); const it = interactables().find(i => Math.hypot(h.x - i.x, h.z - i.z) < i.r); if (it) it.act(); }
     if (potionQueued) { potionQueued = false; drinkPotion(); }
     const h = headPos(); const it = interactables().find(i => Math.hypot(h.x - i.x, h.z - i.z) < i.r); setPrompt(it ? it.label : '');
@@ -956,4 +1267,10 @@ renderer.setAnimationLoop(() => {
   renderer.render(scene, camera);
 });
 addEventListener('beforeunload', () => { if (running) save(); });
-window.__emberwild = { renderer, S, enemies, ragdolls, hitEnemy, heightAt, headPos, dolly, spawnEnemy, startSwing, placePlayer, setYaw: v => { yaw = v; } }; // debug hook
+window.__emberwild = { setDay: v => { dayT = v; }, renderer, S, enemies, ragdolls, hitEnemy, playerHands, poseHand, stones, camera, npcs, makeRagdoll, stepRagdoll, heightAt, headPos, dolly, spawnEnemy, startSwing, placePlayer, setYaw: v => { yaw = v; } }; // debug hook
+// debug: fake VR controllers for testing grab logic on a desktop browser (no headset needed)
+window.__emberwild.simVR = () => {
+  const mk = side => { const grip = new THREE.Group(); dolly.add(grip); const btn = () => ({ value: 0, pressed: false, touched: false }); const gamepad = { buttons: [btn(), btn(), btn(), btn(), btn(), btn(), btn()], axes: [0, 0, 0, 0], hapticActuators: [] }; hands[side] = { grip, src: { handedness: side, gamepad }, prev: [], isHand: false }; grip.add(playerHands[side].g); return hands[side]; };
+  inVR = true; const L = mk('left'), R = mk('right'); holdSword(); L.grip.add(shield);
+  return { hands, grab, stones, scabbard, swordInHand: () => swordInHand, S, pickups, bodyPoint };
+};
