@@ -1,5 +1,5 @@
 // Emberwild service worker: caches the whole game so it starts without internet after the first launch.
-const CACHE = 'emberwild-v12';
+const CACHE = 'emberwild-v13';
 const FILES = ['./', 'index.html', 'game.js', 'manifest.webmanifest', 'lib/three.module.js', 'icons/icon-192.png', 'icons/icon-512.png', 'fonts/Arimo-latin.woff2'];
 self.addEventListener('install', e => { e.waitUntil(caches.open(CACHE).then(c => c.addAll(FILES)).then(() => self.skipWaiting())); });
 self.addEventListener('activate', e => { e.waitUntil(caches.keys().then(ks => Promise.all(ks.filter(k => k !== CACHE).map(k => caches.delete(k)))).then(() => self.clients.claim())); });
