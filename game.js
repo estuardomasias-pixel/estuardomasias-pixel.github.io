@@ -150,11 +150,11 @@ function hitCollider(x, z, pad = 0) { // the collider circle containing (x, z), 
   for (let a = -1; a <= 1; a++) for (let b = -1; b <= 1; b++) { const list = grid.get(gkey(ix + a, iz + b)); if (list) for (const c of list) { const dx = x - c.x, dz = z - c.z; if (dx * dx + dz * dz < (c.r + pad) * (c.r + pad)) return c; } }
   return null;
 }
-function pushOut(v, r) { // moves v (x/z) out of any collider it overlaps; returns true if it touched one
+function pushOut(v, r, solidOnly = false) { // moves v (x/z) out of any collider it overlaps (solidOnly: ignore soft ones like the campfire); true if it touched one
   const ix = Math.floor(v.x / CELL), iz = Math.floor(v.z / CELL); let hit = false;
   for (let a = -1; a <= 1; a++) for (let b = -1; b <= 1; b++) {
     const list = grid.get(gkey(ix + a, iz + b)); if (!list) continue;
-    for (const c of list) { const dx = v.x - c.x, dz = v.z - c.z, m = c.r + r, d2 = dx * dx + dz * dz; if (d2 < m * m && d2 > 1e-8) { const d = Math.sqrt(d2); v.x = c.x + dx / d * m; v.z = c.z + dz / d * m; hit = true; } }
+    for (const c of list) { if (solidOnly && c.soft) continue; const dx = v.x - c.x, dz = v.z - c.z, m = c.r + r, d2 = dx * dx + dz * dz; if (d2 < m * m && d2 > 1e-8) { const d = Math.sqrt(d2); v.x = c.x + dx / d * m; v.z = c.z + dz / d * m; hit = true; } }
   }
   return hit;
 }
@@ -473,7 +473,7 @@ function updateDoors(dt) {
   const h = headPos();
   doors.forEach((d, i) => {
     // villagers open the door they walk through and close it behind them
-    const vNear = villagers.some(n => n.route.length && nearDoorway(d, n.x, n.z, 1.6));
+    const vNear = villagers.some(n => n.route.length && n.route.some(q => q.house === d.H) && nearDoorway(d, n.x, n.z, 2.2));
     if (vNear) { if (d.ang < 1.3) d.target = 1.5; d.auto = true; d.idle = 0; }
     else if (d.auto) { d.idle += dt; if (d.idle > 2.5 && !nearDoorway(d, h.x, h.z, 1.8)) { d.target = 0; d.auto = false; } }
     if (d.target !== null) { d.vel += ((d.target - d.ang) * 28 - d.vel * 7) * dt; if (Math.abs(d.target - d.ang) < 0.02 && Math.abs(d.vel) < 0.15) d.target = null; } // someone swinging it by hand
@@ -482,21 +482,26 @@ function updateDoors(dt) {
       if (d.ang < 0) { if (d.vel < -1.2) { const v = Math.min(1, -d.vel / 4); hiss(0.07, 0.25 * v, 260); tone(80, 0.12, 'triangle', 0.08 * v); } d.ang = 0; d.vel = -d.vel * 0.15; if (Math.abs(d.vel) < 0.3) d.vel = 0; } // slams against the frame
       if (d.ang > DOOR_MAX) { d.ang = DOOR_MAX; if (d.vel > 1) hiss(0.05, 0.12, 300); d.vel = -d.vel * 0.3; } // hits its stop
     }
+    if ((Math.abs(d.vel) > 0.15 || d.held) && Math.abs(h.x - d.H.x) < 5 && Math.abs(h.z - d.H.z) < 5) { const [nx, nz] = doorCollide(h.x, h.z, d); if (nx !== h.x || nz !== h.z) { dolly.position.x += nx - h.x; dolly.position.z += nz - h.z; } }
     doorIM.setMatrixAt(i, doorMatrix(d)); knobIM.setMatrixAt(i, d.m);
   });
   doorIM.instanceMatrix.needsUpdate = true; knobIM.instanceMatrix.needsUpdate = true;
 }
 // the player's body against door leaves: pushing from outside swings it open, otherwise it blocks
-function doorCollide(nx, nz) {
-  for (const d of doors) {
+function doorCollide(nx, nz, only = null) { // only: a door that is moving by itself (it pushes the player, not the other way)
+  for (const d of (only ? [only] : doors)) {
     if (Math.abs(nx - d.H.x) > 6 || Math.abs(nz - d.H.z) > 6) continue;
     const [lx, lz] = doorLocal(d, nx, nz), r = 0.35 / d.H.s, ca = Math.cos(d.ang), sa = Math.sin(d.ang);
     const px = lx + 0.7, pz = lz - DOOR_Z, t = clamp(px * ca - pz * sa, 0, DOOR_W), cx = t * ca, cz = -t * sa; // closest point on the leaf
     const ex = px - cx, ez = pz - cz, dist = Math.hypot(ex, ez); if (dist >= r || dist < 1e-6) continue;
     const pen = r - dist, side = Math.sign(px * sa + pz * ca) || 1; // +1: outside face
     const canSwing = side > 0 ? d.ang < DOOR_MAX : d.ang > 0;
-    if (canSwing && !d.held) { d.vel += side * pen * 55 / Math.max(0.4, t); d.target = null; d.auto = false; } // push on the leaf: more torque far from the hinge
-    const k = canSwing ? 0.6 : 1; // a free door gives way a little, a stopped one blocks completely
+    let k = 1; // how much of the overlap the player must give back
+    if (canSwing && !d.held && !only) { // the leaf turns just enough to clear the body (pushing near the hinge needs more turn)
+      const da = clamp(side * pen / Math.max(0.3, t), -0.25, 0.25), na = clamp(d.ang + da, 0, DOOR_MAX), done = na - d.ang;
+      d.ang = na; d.vel = lerp(d.vel, done / Math.max(frameDt, 1e-3) * 0.7, 0.5); d.target = null; d.auto = false;
+      k = Math.abs(da) > 1e-6 ? 1 - Math.abs(done / da) : 1; // whatever the door couldn't absorb blocks the player
+    }
     const mx = (ex / dist) * pen * k, mz = (ez / dist) * pen * k, c = Math.cos(d.H.rot), sn = Math.sin(d.H.rot);
     nx += (mx * c + mz * sn) * d.H.s; nz += (-mx * sn + mz * c) * d.H.s; // back to world
   }
@@ -522,7 +527,7 @@ const PROPS = { well: { x: -2.5, z: 8 }, block: { x: -8.5, z: -6.5 }, woodpile: 
 // campfire
 const fire = new THREE.Group();
 for (let i = 0; i < 4; i++) { const l = new THREE.Mesh(new THREE.CylinderGeometry(0.1, 0.1, 1.3, 5), M.wood); l.rotation.z = Math.PI / 2; l.rotation.y = i * Math.PI / 4; l.position.set(0, VH + 0.1, 0); STATIC.add(l); }
-const flames = [];
+const flames = []; let fireFlare = 0; // a log thrown in makes it blaze up for a few seconds
 for (let i = 0; i < 3; i++) { const f = new THREE.Mesh(new THREE.ConeGeometry(0.3 - i * 0.07, 1 - i * 0.2, 6), i ? M.flame : M.ember); f.position.y = 0.5; fire.add(f); flames.push(f); }
 for (let i = 0; i < 8; i++) { const s = new THREE.Mesh(new THREE.DodecahedronGeometry(0.22, 0), M.stone); s.position.set(Math.cos(i / 8 * 6.28) * 0.85, VH + 0.1, Math.sin(i / 8 * 6.28) * 0.85); STATIC.add(s); }
 fire.position.set(0, VH, 0); scene.add(fire); addCollider(0, 0, 1.1, VH + 0.6, true);
@@ -613,7 +618,48 @@ const HG = {
   hair: new THREE.SphereGeometry(0.128, 12, 6, 0, Math.PI * 2, 0, Math.PI / 2), beard: new THREE.ConeGeometry(0.075, 0.2, 7),
 };
 const _hm = (geo, mat, parent, x = 0, y = 0, z = 0) => { const m = new THREE.Mesh(geo, mat); m.position.set(x, y, z); parent.add(m); return m; };
-// o: { skin, top, legs, boots, eye, chestW, hunch }
+// Faces for people: an oval head, eyes with whites and pupils (they blink), brows, nose, ears, a mouth that moves
+// when talking, and hair or a hat. Eyes and mouth are separate groups so they can animate; everything else merges.
+const FACE = { white: new THREE.MeshLambertMaterial({ color: 0xf2eee6 }), pupil: new THREE.MeshBasicMaterial({ color: 0x1a1410 }), lips: new THREE.MeshLambertMaterial({ color: 0x7a3a34 }) };
+const FG = {
+  head: new THREE.SphereGeometry(0.12, 20, 14), eyeW: new THREE.SphereGeometry(0.0175, 10, 8), pupil: new THREE.SphereGeometry(0.0095, 8, 6),
+  beard: new THREE.SphereGeometry(0.118, 16, 8, -Math.PI * 0.32, Math.PI * 1.64, Math.PI * 0.6, Math.PI * 0.4), // the lower face, front and sides
+  stache: new THREE.BoxGeometry(0.07, 0.016, 0.02),
+  nose: new THREE.ConeGeometry(0.017, 0.05, 6), ear: new THREE.SphereGeometry(0.026, 8, 6), brow: new THREE.BoxGeometry(0.042, 0.009, 0.012),
+  mouth: new THREE.BoxGeometry(0.045, 0.008, 0.01), hairCap: new THREE.SphereGeometry(0.128, 16, 8, 0, Math.PI * 2, 0, Math.PI * 0.55),
+};
+const EYES_W = mergeGeos([-1, 1].map(sx => ({ geo: FG.eyeW, m: new THREE.Matrix4().makeTranslation(sx * 0.04, 0, 0) }))), EYES_P = mergeGeos([-1, 1].map(sx => ({ geo: FG.pupil, m: new THREE.Matrix4().makeTranslation(sx * 0.04, 0, 0.0115) })));
+function addFace(r, o) {
+  const f = o.face, skin = o.skin, head = r.head, sk = r.skull;
+  sk.geometry = FG.head; sk.scale.set(0.93, 1.08, 0.98); // a little taller than wide
+  const eyes = new THREE.Group(); eyes.position.set(0, 0.13, 0.098); head.add(eyes); // blink by squashing this group
+  eyes.add(new THREE.Mesh(EYES_W, FACE.white), new THREE.Mesh(EYES_P, FACE.pupil)); // both eyes in two meshes
+  const mouth = new THREE.Group(); mouth.position.set(0, 0.062, 0.108); head.add(mouth); _hm(FG.mouth, FACE.lips, mouth);
+  const hairMat = f.hair ? npcMat(f.hair) : null;
+  for (const sx of [-1, 1]) { const b = _hm(FG.brow, hairMat || FACE.pupil, head, sx * 0.043, 0.165, 0.107); b.rotation.z = -sx * (f.brow ?? 0.12); }
+  const nose = _hm(FG.nose, skin, head, 0, 0.1, 0.122); nose.rotation.x = Math.PI / 2 + 0.35;
+  for (const sx of [-1, 1]) _hm(FG.ear, skin, head, sx * 0.112, 0.12, 0).scale.set(0.45, 1, 0.75);
+  if (hairMat && f.style !== 'bald') { const cap = _hm(FG.hairCap, hairMat, head, 0, 0.13, -0.01); cap.rotation.x = -0.35; cap.scale.set(0.97, 1.05, 1.02); }
+  if (f.style === 'long') _hm(new THREE.BoxGeometry(0.2, 0.2, 0.05), hairMat, head, 0, 0.05, -0.1);
+  if (f.style === 'bun') _hm(new THREE.SphereGeometry(0.05, 10, 8), hairMat, head, 0, 0.19, -0.11);
+  if (f.beard) { const bm = npcMat(f.beard); const bd = _hm(FG.beard, bm, head, 0, 0.115, 0.006); bd.rotation.y = Math.PI / 2; bd.scale.set(0.98, 1.1, 1.02); _hm(FG.stache, bm, head, 0, 0.074, 0.115); mouth.position.z = 0.122; } // jaw beard and moustache; lips still show
+  if (f.hat === 'straw') { const hm = npcMat(0xd8c070); _hm(new THREE.CylinderGeometry(0.26, 0.26, 0.012, 18), hm, head, 0, 0.215, 0); _hm(new THREE.CylinderGeometry(0.1, 0.12, 0.09, 14), hm, head, 0, 0.26, 0); }
+  if (f.hat === 'scarf') { const cap = _hm(FG.hairCap, npcMat(f.hatColor || 0xe8e0d0), head, 0, 0.135, -0.012); cap.rotation.x = -0.45; cap.scale.setScalar(1.06); }
+  if (f.hat === 'knit') { const cap = _hm(FG.hairCap, npcMat(f.hatColor || 0x8a3a2a), head, 0, 0.155, -0.005); cap.rotation.x = -0.2; cap.scale.set(1.03, 0.9, 1.03); }
+  // clothing details on the torso
+  if (f.belt) _hm(new THREE.CylinderGeometry(0.17 * (o.chestW || 1), 0.17 * (o.chestW || 1), 0.04, 14), npcMat(0x3a2414), r.upper, 0, 0.17).scale.z = 0.8;
+  if (f.skirt) _hm(new THREE.CylinderGeometry(0.17, 0.3, 0.6, 12), npcMat(f.skirt), r.upper, 0, -0.26);
+  if (f.apron) _hm(new THREE.BoxGeometry(0.3, 0.55, 0.015), npcMat(f.apron), r.upper, 0, 0.05, 0.13);
+  r.eyes = eyes; r.mouth = mouth;
+}
+// eyes blink every few seconds; the mouth moves while talking
+function animateFace(n, dt, talking) {
+  const r = n.r; if (!r.eyes) return; const h = headPos(), near = Math.abs(h.x - n.x) + Math.abs(h.z - n.z) < 14; r.eyes.visible = r.mouth.visible = near; if (!near) return;
+  n.blinkT = (n.blinkT ?? 1 + Math.random() * 3) - dt; if (n.blinkT <= 0) n.blinkT = 2 + Math.random() * 4;
+  r.eyes.scale.y = n.blinkT < 0.13 ? 0.12 : 1;
+  r.mouth.scale.y = talking ? 1 + Math.abs(Math.sin(n.t * 13)) * 2.6 : 1;
+}
+// o: { skin, top, legs, boots, eye, chestW, hunch, face }
 function makeHumanoid(o) {
   const g = new THREE.Group(), cw = o.chestW || 1;
   const upper = new THREE.Group(); upper.position.y = HUM.hip; g.add(upper);
@@ -623,7 +669,7 @@ function makeHumanoid(o) {
   const head = new THREE.Group(); head.position.y = 0.68; upper.add(head);
   const skull = _hm(HG.head, o.skin, head, 0, 0.12);
   const skullPt = new THREE.Object3D(); skullPt.position.y = 0.12; head.add(skullPt); // survives mesh merging
-  if (o.eye) for (const sx of [-1, 1]) _hm(HG.eye, o.eye, skull, sx * 0.045, 0.01, 0.105);
+  if (o.eye && !o.face) for (const sx of [-1, 1]) _hm(HG.eye, o.eye, skull, sx * 0.045, 0.01, 0.105);
   const limb = (geo, mat, parent, x, y) => { const p = new THREE.Group(); p.position.set(x, y, 0); _hm(geo, mat, p); parent.add(p); return p; };
   const arms = [], fore = [], hands = [], legs = [], shins = [];
   for (const sx of [-1, 1]) {
@@ -636,22 +682,32 @@ function makeHumanoid(o) {
     arms.push(ua); fore.push(fa); hands.push(hand); legs.push(th); shins.push(sn);
   }
   const hunch = o.hunch || 0; upper.rotation.x = hunch;
-  return { g, upper, chest, head, skull, skullPt, arms, fore, hands, legs, shins, hunch };
+  const rig = { g, upper, chest, head, skull, skullPt, arms, fore, hands, legs, shins, hunch };
+  if (o.face) addFace(rig, o);
+  return rig;
 }
 // Merge the meshes inside each body-part pivot that share a material into one mesh (fewer draw calls: a gloomling
 // goes from ~22 meshes to ~12). Pivots stay separate so animation and ragdolls still work. Merged geometry is
 // cached per enemy type, so every enemy of a type shares it (nothing to dispose per enemy).
 const _mergeCache = new Map();
-function mergeGeos(list) { // list: [{ geo, m: Matrix4 }] -> one non-indexed geometry with position + normal
+function mergeGeos(list) { // list: [{ geo, m: Matrix4, color? }] -> one non-indexed geometry with position + normal (+ colour if parts carry one)
   const parts = list.map(({ geo, m }) => { const g = (geo.index ? geo.toNonIndexed() : geo.clone()); g.applyMatrix4(m); return g; });
   let n = 0; for (const g of parts) n += g.attributes.position.count;
-  const pos = new Float32Array(n * 3), nor = new Float32Array(n * 3); let o = 0;
-  for (const g of parts) { pos.set(g.attributes.position.array, o * 3); if (g.attributes.normal) nor.set(g.attributes.normal.array, o * 3); o += g.attributes.position.count; g.dispose(); }
-  const out = new THREE.BufferGeometry(); out.setAttribute('position', new THREE.BufferAttribute(pos, 3)); out.setAttribute('normal', new THREE.BufferAttribute(nor, 3));
+  const pos = new Float32Array(n * 3), nor = new Float32Array(n * 3), colored = list.some(l => l.color) || parts.some(g => g.attributes.color), col = colored ? new Float32Array(n * 3) : null; let o = 0;
+  parts.forEach((g, k) => { const c = g.attributes.position.count; pos.set(g.attributes.position.array, o * 3); if (g.attributes.normal) nor.set(g.attributes.normal.array, o * 3);
+    if (col && !list[k].color && g.attributes.color) col.set(g.attributes.color.array.subarray(0, c * 3), o * 3); // already vertex-coloured (e.g. a merged body part)
+    else if (col) { const cc = list[k].color || WHITE; for (let v = 0; v < c; v++) { col[(o + v) * 3] = cc.r; col[(o + v) * 3 + 1] = cc.g; col[(o + v) * 3 + 2] = cc.b; } }
+    o += c; g.dispose(); });
+  const out = new THREE.BufferGeometry(); out.setAttribute('position', new THREE.BufferAttribute(pos, 3)); out.setAttribute('normal', new THREE.BufferAttribute(nor, 3)); if (col) out.setAttribute('color', new THREE.BufferAttribute(col, 3));
   out.computeBoundingSphere(); return out;
 }
-function mergeRig(r, cacheKey) {
-  const pivots = [r.upper, r.head, ...r.arms, ...r.fore, ...r.legs, ...r.shins], into = new Set(r.hands);
+// Every plain-coloured part of a body pivot is baked into ONE mesh with per-vertex colour (one draw call per pivot,
+// whatever the hair, hat, beard or clothes). Glowing or special materials stay grouped by material. opts.mat: the
+// vertex-colour material to use (enemies pass their own so hit flashes still work); opts.keepHands: don't fold hands.
+const VC_SMOOTH = new THREE.MeshLambertMaterial({ vertexColors: true }), VC_FLAT = new THREE.MeshLambertMaterial({ vertexColors: true, flatShading: true });
+function mergeRig(r, cacheKey, opts = {}) {
+  const pivots = [r.upper, r.head, ...r.arms, ...r.fore, ...r.legs, ...r.shins], into = new Set(opts.keepHands ? [] : r.hands);
+  const vcMat = opts.mat || VC_SMOOTH;
   pivots.forEach((pv, pi) => {
     const recs = [];
     const walk = (obj, rel) => { for (const c of obj.children) {
@@ -659,9 +715,11 @@ function mergeRig(r, cacheKey) {
       else if (into.has(c)) { c.updateMatrix(); walk(c, rel.clone().multiply(c.matrix)); } // hand groups fold into the forearm
     } };
     walk(pv, new THREE.Matrix4());
-    if (recs.length < 2) return;
-    const byMat = new Map(); for (const rc of recs) { if (!byMat.has(rc.mesh.material)) byMat.set(rc.mesh.material, []); byMat.get(rc.mesh.material).push(rc); }
+    if (!recs.length) return;
+    const plain = recs.filter(rc => rc.mesh.material.isMeshLambertMaterial && !rc.mesh.material.vertexColors && !rc.mesh.material.transparent);
+    const byMat = new Map(); for (const rc of recs) if (!plain.includes(rc)) { if (!byMat.has(rc.mesh.material)) byMat.set(rc.mesh.material, []); byMat.get(rc.mesh.material).push(rc); }
     for (const rc of recs) rc.mesh.removeFromParent();
+    if (plain.length) { const key = cacheKey + ':' + pi + ':vc'; if (!_mergeCache.has(key)) _mergeCache.set(key, mergeGeos(plain.map(rc => ({ geo: rc.mesh.geometry, m: rc.m, color: rc.mesh.material.color })))); pv.add(new THREE.Mesh(_mergeCache.get(key), vcMat)); }
     let slot = 0;
     for (const [mat, list] of byMat) {
       const key = cacheKey + ':' + pi + ':' + (slot++);
@@ -669,7 +727,7 @@ function mergeRig(r, cacheKey) {
       pv.add(new THREE.Mesh(_mergeCache.get(key), mat));
     }
   });
-  r.chest = null; // merged away (enemies don't breathe)
+  r.chest = null; // merged away
 }
 // walk cycle: amp 0..1 stride, lf 0..1 attack lunge (both arms swing forward)
 function animateHumanoid(r, walk, amp, lf = 0) {
@@ -691,28 +749,29 @@ function makeNPC(name, look, x, z, faceAng, collide = true) {
 }
 const npcMat = c => new THREE.MeshLambertMaterial({ color: c });
 const SKIN = npcMat(0xe0b48a), BOOTS = npcMat(0x3a2a1a), NPC_EYE = new THREE.MeshBasicMaterial({ color: 0x1a1410 });
-const elder = makeNPC('Elder Maren', { skin: SKIN, top: npcMat(0x3b5ba8), legs: npcMat(0x2c3f78), boots: BOOTS, eye: NPC_EYE, chestW: 0.9 }, 3.5, -4, 0.6);
+const elder = makeNPC('Elder Maren', { skin: SKIN, top: npcMat(0x3b5ba8), legs: npcMat(0x2c3f78), boots: BOOTS, eye: NPC_EYE, chestW: 0.9, face: { hair: 0xe8e4dc, style: 'bald', brow: 0.2, belt: true } }, 3.5, -4, 0.6);
 { // long robe, white hair and beard, staff in the hand
   const robeMat = elder.r.chest.material, white = npcMat(0xe8e4dc);
   const skirt = _hm(new THREE.CylinderGeometry(0.19, 0.33, 0.82, 10), robeMat, elder.r.upper, 0, -0.37);
-  const hair = _hm(HG.hair, white, elder.r.skull, 0, 0.012, -0.012); hair.rotation.x = -0.45;
-  const beard = _hm(HG.beard, white, elder.r.skull, 0, -0.12, 0.075); beard.rotation.x = Math.PI + 0.25;
+  const hair = _hm(FG.hairCap, white, elder.r.head, 0, 0.125, -0.025); hair.rotation.x = -0.8; hair.scale.setScalar(1.02); // thinning white hair at the back
+  const beard = _hm(FG.beard, white, elder.r.head, 0, 0.11, 0.008); beard.rotation.y = Math.PI / 2; beard.scale.set(0.98, 1.35, 1.03); _hm(FG.stache, white, elder.r.head, 0, 0.074, 0.115); elder.r.mouth.position.z = 0.122;
   elder.staff = _hm(new THREE.CylinderGeometry(0.03, 0.035, 1.9, 6), M.wood, elder.r.hands[1], 0, -0.12, 0.02); // rests on the ground
   _hm(new THREE.IcosahedronGeometry(0.07, 0), new THREE.MeshBasicMaterial({ color: 0xffd27a }), elder.staff, 0, 0.98, 0);
   elder.r.arms[1].rotation.x = -0.3; elder.r.fore[1].rotation.x = -0.95; elder.skirt = skirt;
 }
 const anvil = new THREE.Mesh(new THREE.BoxGeometry(0.8, 0.6, 0.4), M.stone); anvil.position.set(-6.2, VH + 0.3, 4.4); scene.add(anvil);
-const smith = makeNPC('Smith Tovik', { skin: SKIN, top: npcMat(0x7a3b1e), legs: npcMat(0x3b3026), boots: BOOTS, eye: NPC_EYE, chestW: 1.2 }, -6.15, 3.8, Math.atan2(-6.2 + 6.15, 4.4 - 3.8));
+const smith = makeNPC('Smith Tovik', { skin: SKIN, top: npcMat(0x7a3b1e), legs: npcMat(0x3b3026), boots: BOOTS, eye: NPC_EYE, chestW: 1.2, face: { hair: 0x3a2414, style: 'bald', brow: 0.05 } }, -6.15, 3.8, Math.atan2(-6.2 + 6.15, 4.4 - 3.8));
 { const bar = new THREE.Mesh(new THREE.BoxGeometry(0.25, 0.03, 0.04), new THREE.MeshLambertMaterial({ color: 0x552200, emissive: 0xff6a1a })); bar.position.set(-6.2, VH + 0.615, 4.38); scene.add(bar); } // hot metal on the anvil
 { // leather apron, dark beard, hammer
   const leather = npcMat(0x4a2a14), brown = npcMat(0x3a2414);
   const apron = _hm(new THREE.BoxGeometry(0.34, 0.62, 0.02), leather, smith.r.upper, 0, 0.18, 0.135); apron.rotation.x = -0.05;
-  const beard = _hm(HG.beard, brown, smith.r.skull, 0, -0.11, 0.08); beard.rotation.x = Math.PI + 0.3;
+  const beard = _hm(FG.beard, brown, smith.r.head, 0, 0.115, 0.006); beard.rotation.y = Math.PI / 2; beard.scale.set(0.98, 1.15, 1.02); _hm(FG.stache, brown, smith.r.head, 0, 0.074, 0.115); smith.r.mouth.position.z = 0.122;
   smith.hammer = new THREE.Group(); smith.hammer.position.set(0, -0.02, 0); smith.r.hands[0].add(smith.hammer); // right hand (the rig faces +Z, so its right is -X: hands[0])
   for (const sx of [-0.012, 0.012]) _hm(new THREE.BoxGeometry(0.008, 0.008, 0.38), M.dark, smith.r.hands[1], sx, -0.02, 0.17); // tongs in the left
   _hm(new THREE.CylinderGeometry(0.018, 0.018, 0.42, 5), M.wood, smith.hammer, 0, 0, 0.15).rotation.x = Math.PI / 2;
   _hm(new THREE.BoxGeometry(0.07, 0.17, 0.07), M.stone, smith.hammer, 0, -0.02, 0.36); // head across the handle, face striking the anvil
 }
+mergeRig(elder.r, 'npc:elder', { keepHands: true }); mergeRig(smith.r, 'npc:smith', { keepHands: true });
 const npcs = [elder, smith];
 // ---------------------------------------------------------------- villagers with daily chores
 // Each villager loops through a list of tasks: walk to a spot (through house doors when going in or out, around the
@@ -805,7 +864,7 @@ function chorePose(n, act, t, dt) {
   else if (act === 'cower') { r.upper.rotation.x = r.hunch + 0.55; for (const s of [0, 1]) { r.legs[s].rotation.x = -1.1; r.shins[s].rotation.x = 1.7; r.arms[s].rotation.x = -2.5 + Math.sin(t * 7 + s) * 0.05; r.arms[s].rotation.z = (s ? 1 : -1) * 0.45; r.fore[s].rotation.x = -1.5; } }
   else if (act === 'sit') { for (const s of [0, 1]) { r.legs[s].rotation.x = -1.5; r.shins[s].rotation.x = 1.5; r.arms[s].rotation.x = -0.75; r.fore[s].rotation.x = -0.5; } }
   else if (act === 'sleep') { n.g.rotation.x = -Math.PI / 2; for (const s of [0, 1]) { r.arms[s].rotation.x = 0; r.fore[s].rotation.x = -0.1; } }
-  else { for (const s of [0, 1]) { r.arms[s].rotation.x = -0.05; r.fore[s].rotation.x = -0.2; } } // idle
+  else { for (const s of [0, 1]) { r.arms[s].rotation.x = -0.05; r.fore[s].rotation.x = -0.2; } r.upper.rotation.z = Math.sin(t * 0.7) * 0.025; } // idle, shifting weight
 }
 // Villagers react to the world: they run home and take cover when Gloom creatures come near the village, flinch
 // (and complain) when a blade or arrow comes too close, greet you as you pass, step out of each other's way, and
@@ -871,7 +930,8 @@ function updateVillagers(dt) {
     const look = dp < 4 && n.act !== 'sleep' ? THREE.MathUtils.clamp(wrapAng(Math.atan2(dxp, dzp) - n.yaw), -1.1, 1.1) : 0;
     n.head.rotation.y = lerp(n.head.rotation.y, look, Math.min(1, dt * 4));
     const sc = n.g.scale.x, lift = n.act === 'sit' ? -0.45 * sc : n.act === 'tend' ? -0.4 * sc : n.act === 'sleep' ? 0.5 * n.home.s : n.act === 'cower' ? -0.35 * sc : 0;
-    n.lift = lerp(n.lift ?? lift, lift, Math.min(1, dt * 6));
+    n.lift = lerp(n.lift ?? lift, lift, Math.min(1, dt * 6)); animateFace(n, dt, n.talk > 0 || n.greet > 0);
+    if (n.act === 'sleep' && n.r.eyes) n.r.eyes.scale.y = 0.12; // asleep: eyes closed
     n.g.position.set(n.x, groundAt(n.x, n.z) + n.lift, n.z);
   }
 }
@@ -879,26 +939,26 @@ const H_GARDEN = nearestHouse(PROPS.garden.x, PROPS.garden.z), H_BLOCK = nearest
 const H_WELL = nearestHouse(PROPS.well.x, PROPS.well.z), H_KID = HOUSES.find(Hh => ![H_GARDEN, H_BLOCK, H_WELL].includes(Hh)) || HOUSES[0];
 const spot = (x, z) => ({ x, z }), faceTo = (fx, fz, tx, tz) => Math.atan2(tx - fx, tz - fz);
 const VG = PROPS.garden, VB = PROPS.block, VW = PROPS.well, VP = PROPS.woodpile;
-makeVillager({ name: 'Farmer Odile', home: H_GARDEN, look: { skin: npcMat(0xc99a72), top: npcMat(0x5a7a3a), legs: npcMat(0x4a3a2a), boots: BOOTS, eye: NPC_EYE, chestW: 0.9 },
+makeVillager({ name: 'Farmer Odile', home: H_GARDEN, look: { skin: npcMat(0xc99a72), top: npcMat(0x5a7a3a), legs: npcMat(0x4a3a2a), boots: BOOTS, eye: NPC_EYE, chestW: 0.9, face: { hair: 0x6a4428, style: 'bun', hat: 'straw', belt: true, skirt: 0x6a5a3a } },
   day: [
     { at: spot(VG.x - 0.5, VG.z + 1.4), act: 'hoe', prop: 'hoe', dur: 14, face: Math.PI },
     { at: spot(VG.x + 0.6, VG.z + 1.3), act: 'tend', dur: 8, face: Math.PI },
     { at: inHouse(H_GARDEN, 0.55, 0.6), act: 'sit', carry: 'basket', dur: 9, face: Math.PI / 2, local: true },
   ], lines: ['The soil here is stubborn, but the turnips don\'t mind.', 'Keep the Gloom out of my garden, warden!', 'Fresh greens for Ines\'s soup - nothing better.'] });
-makeVillager({ name: 'Woodcutter Bram', home: H_BLOCK, look: { skin: npcMat(0xd8a47e), top: npcMat(0x8a2f2f), legs: npcMat(0x3b3026), boots: BOOTS, eye: NPC_EYE, chestW: 1.25 },
+makeVillager({ name: 'Woodcutter Bram', home: H_BLOCK, look: { skin: npcMat(0xd8a47e), top: npcMat(0x8a2f2f), legs: npcMat(0x3b3026), boots: BOOTS, eye: NPC_EYE, chestW: 1.25, face: { hair: 0x2a1c12, style: 'cap', hat: 'knit', hatColor: 0x4a5a3a, beard: 0x2a1c12, brow: 0.02, belt: true } },
   day: [
     { at: spot(VB.x + 0.72, VB.z + 0.3), act: 'chop', prop: 'axe', dur: 14, face: faceTo(VB.x + 0.72, VB.z + 0.3, VB.x, VB.z) },
     { at: spot(VP.x + 0.9, VP.z), act: 'stack', carry: 'log', dur: 3, face: -Math.PI / 2 },
     { at: spot(-1.6, -1.2), act: 'warm', dur: 7, face: faceTo(-1.6, -1.2, 0, 0) },
   ], lines: ['There\'s a spare axe by my chopping block. Take it - it bites deeper than a sword.', 'Firewood keeps the Gloom at bay. Can\'t have too much of it.', 'Mind the axe, friend.', 'That fire burns all night. Somebody has to feed it.'] });
-makeVillager({ name: 'Ines the Cook', home: H_WELL, look: { skin: npcMat(0xb98a64), top: npcMat(0x8a6a2a), legs: npcMat(0x6a3a4a), boots: BOOTS, eye: NPC_EYE, chestW: 0.95 },
+makeVillager({ name: 'Ines the Cook', home: H_WELL, look: { skin: npcMat(0xb98a64), top: npcMat(0x8a6a2a), legs: npcMat(0x6a3a4a), boots: BOOTS, eye: NPC_EYE, chestW: 0.95, face: { hair: 0x1a1210, style: 'long', hat: 'scarf', hatColor: 0xa83a32, apron: 0xe8e0d0, skirt: 0x6a3a4a } },
   day: [
     { at: inHouse(H_WELL, 1.6, -0.75), act: 'stir', prop: 'spoon', dur: 14, face: Math.PI, local: true },
     { at: spot(VW.x + 1.05, VW.z), act: 'pull', dur: 7, face: -Math.PI / 2 },
     { at: inHouse(H_WELL, 1.6, -0.75), act: 'stir', carry: 'bucket', prop: 'spoon', dur: 10, face: Math.PI, local: true },
     { at: inHouse(H_WELL, 0.55, 0.6), act: 'sit', dur: 7, face: Math.PI / 2, local: true },
   ], lines: ['Soup\'s on soon. The well water makes all the difference.', 'You look hungry, warden. Come by later.', 'Bram eats enough for three woodcutters.'] });
-makeVillager({ name: 'Young Pip', home: H_KID, scale: 0.68, speed: 1.7, look: { skin: npcMat(0xe0b48a), top: npcMat(0x3a6aa8), legs: npcMat(0x5a4a3a), boots: BOOTS, eye: NPC_EYE, chestW: 0.9 },
+makeVillager({ name: 'Young Pip', home: H_KID, scale: 0.68, speed: 1.7, look: { skin: npcMat(0xe0b48a), top: npcMat(0x3a6aa8), legs: npcMat(0x5a4a3a), boots: BOOTS, eye: NPC_EYE, chestW: 0.9, face: { hair: 0xc0602a, style: 'cap', brow: 0.18 } },
   day: [
     { at: spot(5.6, -0.6), act: 'sweep', prop: 'broom', dur: 10, face: 0.6 },
     { at: spot(VW.x - 0.6, VW.z - 1.4), act: 'wave', dur: 3, face: Math.PI },
@@ -916,7 +976,8 @@ function updateNPCs(dt) {
     const look = d < 9 ? THREE.MathUtils.clamp(wrapAng(toYou - n.yaw), -1.1, 1.1) : 0;
     n.head.rotation.y = lerp(n.head.rotation.y, busy ? 0 : look, Math.min(1, dt * 4));
     n.head.rotation.x = lerp(n.head.rotation.x, busy ? 0.35 : n.talk > 0 ? Math.sin(n.t * 5) * 0.08 : isNight() ? 0.2 : -0.05, Math.min(1, dt * 4));
-    n.r.chest.scale.y = 1 + Math.sin(n.t * 1.7) * 0.025; // breathing
+    n.r.upper.scale.set(1, 1 + Math.sin(n.t * 1.7) * 0.012, 1 + Math.sin(n.t * 1.7) * 0.015); // breathing
+    animateFace(n, dt, n.talk > 0);
     const r = n.r, gest = n.talk > 0 ? Math.sin(n.t * 3.1) : 0;
     const ga = n === smith ? 1 : 0; // gesture with the free hand
     r.arms[ga].rotation.x = -0.05 - (n.talk > 0 ? 0.6 + gest * 0.25 : 0); r.fore[ga].rotation.x = -0.2 - (n.talk > 0 ? 0.7 : 0);
@@ -933,6 +994,105 @@ function updateNPCs(dt) {
   }
 }
 
+// ---------------------------------------------------------------- grabbable items (food, dishes, logs)
+// Small rigid objects with simple physics: gravity, bounces that turn into spin, sliding friction, landing on
+// tables/shelves/beds/floors, and settling into a stable pose. Apples hang on a tree and turnips are planted:
+// grab and pull to free them. Food is eaten by bringing it to your mouth; logs tossed on the campfire burn.
+// Each item type is one instanced draw call.
+const ITEM_TYPES = {
+  apple: { r: 0.04, e: 0.35, heal: 10, sound: 'soft', name: 'apple' },
+  turnip: { r: 0.045, e: 0.3, heal: 8, sound: 'soft', name: 'turnip' },
+  bread: { r: 0.06, e: 0.15, heal: 20, sound: 'soft', name: 'bread', flat: true },
+  mug: { r: 0.05, e: 0.3, sound: 'clink', upright: true },
+  plate: { r: 0.08, e: 0.25, sound: 'plate', flat: true },
+  log: { r: 0.09, e: 0.12, sound: 'thud', fuel: true, side: true },
+};
+const ITEM_GEO = {
+  apple: mergeGeos([{ geo: new THREE.SphereGeometry(0.04, 10, 8), m: new THREE.Matrix4() }, { geo: new THREE.CylinderGeometry(0.004, 0.004, 0.025, 4), m: new THREE.Matrix4().makeTranslation(0, 0.045, 0) }]),
+  turnip: mergeGeos([{ geo: new THREE.SphereGeometry(0.045, 10, 8), m: new THREE.Matrix4().makeScale(1, 0.85, 1) }, { geo: new THREE.ConeGeometry(0.025, 0.12, 5), m: new THREE.Matrix4().makeTranslation(0, 0.09, 0) }]),
+  bread: new THREE.CapsuleGeometry(0.045, 0.1, 4, 8).rotateZ(Math.PI / 2).scale(1, 0.75, 1),
+  mug: mergeGeos([{ geo: new THREE.CylinderGeometry(0.042, 0.038, 0.1, 10), m: new THREE.Matrix4() }, { geo: new THREE.TorusGeometry(0.028, 0.007, 4, 8, Math.PI), m: new THREE.Matrix4().makeRotationZ(-Math.PI / 2).setPosition(0.042, 0, 0) }]),
+  plate: new THREE.CylinderGeometry(0.11, 0.09, 0.016, 14),
+  log: new THREE.CylinderGeometry(0.09, 0.09, 0.5, 8).rotateZ(Math.PI / 2),
+};
+const ITEM_MAT = { apple: npcMat(0xb8241c), turnip: npcMat(0xd8c8d8), bread: npcMat(0xb07a3a), mug: npcMat(0x8a6a4a), plate: npcMat(0xe8e2d4), log: M.wood };
+const items = [];
+function addItem(type, x, y, z, stuck = null, home = null) {
+  const it = { type, T: ITEM_TYPES[type], p: new THREE.Vector3(x, y, z), v: new THREE.Vector3(), q: new THREE.Quaternion(), w: new THREE.Vector3(), rest: true, stuck, held: null, gone: 0, home: home || { x, y, z, stuck } };
+  if (type === 'log') it.q.setFromAxisAngle(THREE.Object3D.DEFAULT_UP, Math.random() * 6.28);
+  items.push(it); return it;
+}
+// surfaces inside houses things can rest on (house-local rectangles and their top heights)
+const SURFACES = [{ x0: 0.85, x1: 1.95, z0: 0.25, z1: 0.95, y: 0.785 }, { x0: 1.05, x1: 2.15, z0: -1.8, z1: -1.2, y: 0.9 }, { x0: -2.3, x1: -1.3, z0: -1.8, z1: 0.2, y: 0.49 }, { x0: -0.7, x1: 0.5, z0: -1.88, z1: -1.58, y: 1.53 }];
+function surfaceBelow(x, y, z) {
+  let g = groundAt(x, z); const H = houseAt(x, z); if (!H) return g;
+  const [lx, lz] = houseToLocal(H, x, z);
+  for (const s of SURFACES) { const top = H.h + s.y * H.s; if (lx > s.x0 && lx < s.x1 && lz > s.z0 && lz < s.z1 && y >= top - 0.06 && top > g) g = top; }
+  return g;
+}
+const STATIC3 = new THREE.Group();
+{ // place everything: dishes and bread on every table, turnips in the garden, an apple tree by the garden, logs by the woodpile
+  for (const H of HOUSES) {
+    const at = (lx, lz, ly) => { const w = houseToWorld(H, lx, lz); return [w.x, H.h + ly * H.s, w.z]; };
+    const [ax, ay, az] = at(1.15, 0.5, 0.785); addItem('plate', ax, ay + 0.008, az);
+    const [bx, by, bz] = at(1.15, 0.5, 0.785); addItem('bread', bx, by + 0.05, bz);
+    const [cx, cy, cz] = at(1.7, 0.75, 0.785); addItem('mug', cx, cy + 0.05, cz);
+  }
+  const G = PROPS.garden; for (let a = 0; a < 2; a++) for (let b = 0; b < 4; b++) addItem('turnip', G.x - 0.85 + b * 0.55, VH + 0.1, G.z - 0.3 + a * 0.6, 'planted');
+  const AT = { x: PROPS.garden.x + 3.2, z: PROPS.garden.z - 2.2 }; // a small apple tree
+  const trunkM = new THREE.Mesh(new THREE.CylinderGeometry(0.1, 0.16, 2, 7), M.wood); trunkM.position.set(AT.x, VH + 1, AT.z); STATIC3.add(trunkM);
+  const crownM = new THREE.Mesh(new THREE.IcosahedronGeometry(1.2, 1), new THREE.MeshLambertMaterial({ color: 0x3f7a30, flatShading: true })); crownM.position.set(AT.x, VH + 2.6, AT.z); STATIC3.add(crownM);
+  addCollider(AT.x, AT.z, 0.2, VH + 3.6);
+  for (let k = 0; k < 7; k++) { const a = k / 7 * 6.283, rr = 0.95 + (k % 2) * 0.2; addItem('apple', AT.x + Math.cos(a) * rr, VH + 2.05 + (k % 3) * 0.25, AT.z + Math.sin(a) * rr, 'hanging'); }
+  for (let k = 0; k < 3; k++) addItem('log', PROPS.woodpile.x + 0.2 + k * 0.25, VH + 0.09, PROPS.woodpile.z + 0.75);
+  bakeGroup(STATIC3);
+}
+const itemMeshes = {};
+for (const t in ITEM_TYPES) { const n = items.filter(i => i.type === t).length; const im = new THREE.InstancedMesh(ITEM_GEO[t], ITEM_MAT[t], Math.max(1, n)); im.frustumCulled = false; scene.add(im); itemMeshes[t] = im; }
+function itemSound(it, sp) {
+  const v = Math.min(1, sp / 5), h = headPos(), d = h.distanceTo(it.p); if (d > 15 || v < 0.1) return; const k = v * (1 - d / 15);
+  if (it.T.sound === 'clink') { tone(1700 + Math.random() * 500, 0.08, 'square', 0.03 * k); hiss(0.03, 0.08 * k, 3000); }
+  else if (it.T.sound === 'plate') { tone(2400 + Math.random() * 600, 0.12, 'square', 0.025 * k); tone(3100, 0.1, 'square', 0.015 * k); }
+  else if (it.T.sound === 'thud') { tone(85, 0.1, 'triangle', 0.08 * k); hiss(0.06, 0.15 * k, 300); }
+  else hiss(0.04, 0.1 * k, 260);
+}
+const _iq = new THREE.Quaternion(), _iv = new THREE.Vector3(), _iu = new THREE.Vector3(), _im = new THREE.Matrix4(), _ione = new THREE.Vector3(1, 1, 1);
+function updateItems(dt) {
+  const h = headPos(), counts = {};
+  for (const t in itemMeshes) counts[t] = 0;
+  for (const it of items) {
+    if (it.gone > 0) { it.gone -= dt; if (it.gone <= 0) { const o = it.home; it.p.set(o.x, o.y, o.z); it.stuck = o.stuck; it.rest = true; it.v.set(0, 0, 0); it.w.set(0, 0, 0); it.q.identity(); } else continue; } // grows back / is replaced
+    if (!it.held && !it.rest && !it.stuck && !it.flying) {
+      it.v.y -= 9.81 * dt; it.p.addScaledVector(it.v, dt);
+      const om = it.w.length(); if (om > 1e-4) { _iq.setFromAxisAngle(_iu.copy(it.w).divideScalar(om), om * dt); it.q.premultiply(_iq); it.w.multiplyScalar(Math.exp(-0.6 * dt)); }
+      if (it.p.y < groundAt(it.p.x, it.p.z) + 3) { _v4.copy(it.p); if (pushOut(it.p, it.T.r, true)) { const nx = it.p.x - _v4.x, nz = it.p.z - _v4.z, nl = Math.hypot(nx, nz) || 1, vn = (it.v.x * nx + it.v.z * nz) / nl; if (vn < 0) { it.v.x -= (1 + it.T.e) * vn * nx / nl; it.v.z -= (1 + it.T.e) * vn * nz / nl; itemSound(it, -vn); } } } // walls
+      const floor = surfaceBelow(it.p.x, it.p.y + it.T.r, it.p.z) + it.T.r * (it.T.flat ? 0.3 : it.T.upright ? 1 : 0.85);
+      if (it.p.y < floor) {
+        it.p.y = floor; const vy = -it.v.y; if (vy > 0.4) itemSound(it, vy);
+        it.v.y = vy > 0.6 ? vy * it.T.e : 0; it.w.x += it.v.z * 4; it.w.z -= it.v.x * 4; // the bounce turns into tumbling
+        it.v.x *= 0.7; it.v.z *= 0.7; it.w.multiplyScalar(0.7);
+        if (it.v.length() < 0.25) { it.rest = true; it.v.set(0, 0, 0); it.w.set(0, 0, 0); } // settled
+      }
+      // thrown things sting a little
+      const sp = it.v.length();
+      if (sp > 6) for (const e of enemies) if (!e.dead && e.hitCd <= 0 && Math.hypot(it.p.x - e.x, it.p.z - e.z) < e.rad + it.T.r && it.p.y - e.g.position.y < 1.9 * e.T.scale) { hitEnemy(e, clamp(sp / 12, 0.3, 1), h.x, h.z, it.v.clone().multiplyScalar(0.4), 4 + S.level); it.v.multiplyScalar(-0.3); break; }
+      if (sp > 4) for (const n of villagers) if (Math.hypot(it.p.x - n.x, it.p.z - n.z) < 0.35 && it.p.y - n.g.position.y < 1.8) { villagerFlinch(n, 'Hey! Who threw that?'); it.v.multiplyScalar(-0.3); break; }
+      // a log landing in the campfire burns
+      if (it.T.fuel && Math.hypot(it.p.x, it.p.z) < 1.0 && it.p.y < VH + 1.2) { it.gone = 60; fireFlare = 3; burst(_iv.set(0, VH + 0.6, 0), 0xffb040, 40, 3, 3); hiss(0.6, 0.3, 1400); continue; }
+    }
+    if (it.rest && !it.held && !it.stuck) { // settle into a stable pose
+      if (it.T.flat || it.T.upright) it.q.slerp(_iq.setFromAxisAngle(THREE.Object3D.DEFAULT_UP, 2 * Math.atan2(it.q.y, it.q.w)), Math.min(1, dt * 8));
+      else if (it.T.side) { const ax = _iv.set(1, 0, 0).applyQuaternion(it.q); ax.y = 0; if (ax.lengthSq() > 1e-4) { ax.normalize(); it.q.slerp(_iq.setFromUnitVectors(_iu.set(1, 0, 0), ax), Math.min(1, dt * 8)); } }
+    }
+    const t = it.type; itemMeshes[t].setMatrixAt(counts[t]++, _im.compose(it.p, it.q, _ione));
+  }
+  for (const t in itemMeshes) { itemMeshes[t].count = counts[t]; itemMeshes[t].instanceMatrix.needsUpdate = true; }
+}
+// hand support
+function itemGrabCandidates(p, consider) { for (const it of items) { if (it.gone > 0 || it.held || it.flying) continue; const d = it.p.distanceTo(p) - it.T.r; if (d < 0.1) consider(d, { kind: 'item', it }); } }
+function itemPullCandidates(test) { for (const it of items) if (!(it.gone > 0) && !it.held && !it.stuck && !it.flying) test(it.p, { kind: 'item', it }); }
+function eatItem(it) { S.hp = Math.min(maxHp(), S.hp + it.T.heal); it.gone = it.type === 'apple' ? 120 : 180; it.held = null; hiss(0.12, 0.2, 900); tone(220, 0.05, 'triangle', 0.04); tone(180, 0.05, 'triangle', 0.04, 0, 0.12); toast(`You eat the ${it.T.name}. (+${it.T.heal} health)`, 2, true); }
+
 // ---------------------------------------------------------------- player gear
 const shield = new THREE.Group();
 {
@@ -947,7 +1107,7 @@ const toastPanel = makePanel(0.9, 0.3, 900, 300, 1.25); toastPanel.mesh.position
 const promptPanel = makePanel(0.7, 0.09, 700, 90); promptPanel.mesh.position.set(0, -0.32, -1.2); promptPanel.mesh.visible = false; camera.add(promptPanel.mesh);
 const hurtFlash = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), new THREE.MeshBasicMaterial({ color: 0xff0000, transparent: true, opacity: 0, depthTest: false, fog: false }));
 hurtFlash.position.z = -0.12; hurtFlash.renderOrder = 1000; hurtFlash.visible = false; camera.add(hurtFlash);
-const wrist = makePanel(0.17, 0.12, 510, 360, 1.2); wrist.mesh.position.set(0.055, 0.13, 0.02); wrist.mesh.rotation.set(0, Math.PI / 2, 0); // inside of the left wrist (+Y runs toward the arm)
+const wrist = makePanel(0.17, 0.12, 510, 360, 1.5); // ~765 px across: crisp at arm's length on Quest 3 wrist.mesh.position.set(0.055, 0.13, 0.02); wrist.mesh.rotation.set(0, Math.PI / 2, 0); // inside of the left wrist (+Y runs toward the arm)
 
 // ---------------------------------------------------------------- XR controllers
 const hands = { left: null, right: null };
@@ -1153,19 +1313,20 @@ function pullCandidate(side) {
   const test = (pos, c) => { _pv.subVectors(pos, _ro); const d = _pv.length(); if (d < 0.5 || d > 8) return; const cos = _pv.dot(_rdir) / d; if (cos > bc) { bc = cos; best = c; } };
   for (const st of stones) if (!st.held && !st.flying) test(st.p, { kind: 'stone', s: st });
   for (const pk of pickups) if (!pk.flying) test(pk.m.position, { kind: 'pickup', pk });
-  weaponPullCandidates(test);
+  weaponPullCandidates(test); itemPullCandidates(test);
   return best;
 }
-function startPull(side, c) { pulling[side] = c; if (c.s) { c.s.flying = side; c.s.rest = false; } else if (c.w) { c.w.flying = side; c.w.rest = false; } else c.pk.flying = side; pulse(side, 0.4, 60); tone(520, 0.12, 'sine', 0.06, 300); }
-function cancelPull(side) { const c = pulling[side]; if (!c) return; pulling[side] = null; if (c.s) { c.s.flying = null; c.s.rest = false; } else if (c.w) { c.w.flying = null; c.w.v.set(0, 0, 0); } else c.pk.flying = null; }
+function startPull(side, c) { pulling[side] = c; if (c.it) { c.it.flying = side; c.it.rest = false; } else if (c.s) { c.s.flying = side; c.s.rest = false; } else if (c.w) { c.w.flying = side; c.w.rest = false; } else c.pk.flying = side; pulse(side, 0.4, 60); tone(520, 0.12, 'sine', 0.06, 300); }
+function cancelPull(side) { const c = pulling[side]; if (!c) return; pulling[side] = null; if (c.it) { c.it.flying = null; c.it.rest = false; return; } if (c.s) { c.s.flying = null; c.s.rest = false; } else if (c.w) { c.w.flying = null; c.w.v.set(0, 0, 0); } else c.pk.flying = null; }
 function updatePull(side, p, dt) {
   const c = pulling[side]; if (!c) return;
-  const pos = c.s ? c.s.p : c.w ? c.w.p : c.pk.m.position, d = pos.distanceTo(p);
+  const pos = c.it ? c.it.p : c.s ? c.s.p : c.w ? c.w.p : c.pk.m.position, d = pos.distanceTo(p);
   pos.lerp(p, Math.min(1, dt * 7)); pos.y += Math.min(d, 2) * dt * 1.5; // flies to the hand in a slight arc
   if (c.s) syncStone(c.s); else if (c.w) c.w.g.position.copy(c.w.p);
   if (d < 0.18) { // arrived
     pulling[side] = null;
-    if (c.s) { c.s.flying = null; c.s.held = side; c.s.v.set(0, 0, 0); grab[side] = { kind: 'stone', s: c.s }; }
+    if (c.it) { c.it.flying = null; c.it.held = side; grab[side] = { kind: 'item', it: c.it, start: p.clone() }; }
+    else if (c.s) { c.s.flying = null; c.s.held = side; c.s.v.set(0, 0, 0); grab[side] = { kind: 'stone', s: c.s }; }
     else if (c.w) { c.w.flying = null; holdInHand(c.w, side); }
     else { const i = pickups.indexOf(c.pk); if (i >= 0) pickups.splice(i, 1); scene.remove(c.pk.m); const m = makePotionMesh(); scene.add(m); grab[side] = { kind: 'potion', m }; sfx.pickup(); }
     pulse(side, 0.6, 50);
@@ -1203,7 +1364,7 @@ function grabCandidate(side, p) {
   }
   for (const c of chests) if (!c.opened) { const d = _v3.set(c.x, c.g.position.y + 0.55, c.z).distanceTo(p) - 0.35; if (d < 0.12) consider(d + 0.03, { kind: 'chest', c }); }
   if (S.potions > 0 && bodyPoint(0.36, 0.12, 0, _pocketPt).distanceTo(p) < 0.2) consider(0.15, { kind: 'pocket' });
-  weaponGrabCandidates(side, p, consider);
+  weaponGrabCandidates(side, p, consider); itemGrabCandidates(p, consider);
   for (const d of doors) { if (Math.abs(p.x - d.H.x) > 5 || Math.abs(p.z - d.H.z) > 5) continue; for (const sd of [-1, 1]) { const k = doorKnob(d, sd, _wb); const dd = k.distanceTo(p); if (dd < 0.14) consider(dd, { kind: 'door', d }); } }
   return best;
 }
@@ -1214,6 +1375,7 @@ function tryGrab(side, p) {
   else if (c.kind === 'rag') { if (grab[other]?.rd === c.rd && grab[other].i === c.i) releaseGrab(other, true); c.rd.pins = c.rd.pins || {}; c.rd.pins[side] = { i: c.i, t: c.rd.P[c.i].p.clone() }; grab[side] = { kind: 'rag', rd: c.rd, i: c.i }; }
   else if (c.kind === 'chest') { openChest(c.c); pulse(side, 0.6, 60); return true; }
   else if (c.kind === 'weapon') { holdInHand(c.w, side); return true; }
+  else if (c.kind === 'item') { grab[side] = { kind: 'item', it: c.it, start: p.clone() }; c.it.held = side; c.it.rest = false; }
   else if (c.kind === 'door') { grab[side] = { kind: 'door', d: c.d }; c.d.held = true; c.d.target = null; c.d.auto = false; }
   else if (c.kind === 'hip') { holdInHand(hipW, side); sfx.swing(); return true; }
   else if (c.kind === 'nock') { if (!arrowsAvailable()) return true; S.arrows--; grab[side] = { kind: 'arrow', w: c.w }; c.w.nockSide = side; tone(620, 0.05, 'triangle', 0.05); }
@@ -1237,6 +1399,7 @@ function releaseGrab(side, quiet) {
     if (!quiet && ragdolls.includes(rd)) { for (const pt of rd.P) pt.o.addScaledVector(v, -RAG_STEP * 0.35); rd.P[gb.i].o.copy(rd.P[gb.i].p).addScaledVector(v, -RAG_STEP); }
   }
   else if (gb.kind === 'door') { gb.d.held = false; } // let go: it keeps swinging
+  else if (gb.kind === 'item') { const it = gb.it; it.held = null; if (!it.stuck) { it.rest = false; it.v.copy(quiet ? _v3.set(0, 0, 0) : v); it.w.copy(quiet ? _v3.set(0, 0, 0) : handAngVel(side, new THREE.Vector3())).clampLength(0, 20); } }
   else if (gb.kind === 'arrowHand') { S.arrows++; handArrow.visible = false; }
   else if (gb.kind === 'arrow') { // let go of the string: shoot if drawn far enough
     const w = gb.w, d = bowDraw(w), hp = hands[side] ? hands[side].grip.getWorldPosition(new THREE.Vector3()) : null;
@@ -1281,18 +1444,26 @@ function updateHands(dt) {
     // hover feedback
     const free = !grab[side] && !pulling[side];
     const cand = free ? grabCandidate(side, p) : null, aim = free && !cand ? pullCandidate(side) : null; pullAim[side] = aim;
-    const key = cand ? (cand.s || cand.pk || cand.c || cand.w || (cand.rd ? cand.rd.P[cand.i] : cand.kind)) : aim ? (aim.s || aim.pk || aim.w) : null;
+    const key = cand ? (cand.s || cand.pk || cand.c || cand.w || cand.it || (cand.rd ? cand.rd.P[cand.i] : cand.kind)) : aim ? (aim.s || aim.pk || aim.w || aim.it) : null;
     if (key !== hover[side]) {
       if (stones.includes(hover[side])) highlightStone(hover[side], false); else if (pickups.includes(hover[side])) hover[side].m.scale.setScalar(1);
       if (key) pulse(side, 0.15, 15); hover[side] = key;
       if (key && stones.includes(key)) highlightStone(key, true); else if (key && pickups.includes(key)) key.m.scale.setScalar(1.35);
     }
     const al = aimLines[side]; al.visible = !!aim; // faint line to what a squeeze would pull
-    if (aim) { const a = al.geometry.attributes.position, t = aim.s ? aim.s.p : aim.w ? aim.w.p : aim.pk.m.position; a.setXYZ(0, _ro.x, _ro.y, _ro.z); a.setXYZ(1, t.x, t.y, t.z); a.needsUpdate = true; }
+    if (aim) { const a = al.geometry.attributes.position, t = aim.s ? aim.s.p : aim.w ? aim.w.p : aim.it ? aim.it.p : aim.pk.m.position; a.setXYZ(0, _ro.x, _ro.y, _ro.z); a.setXYZ(1, t.x, t.y, t.z); a.needsUpdate = true; }
     // carry the held thing
     const gb = grab[side];
     if (gb?.kind === 'stone') { gb.s.p.copy(p); syncStone(gb.s); }
     else if (gb?.kind === 'rag') { if (!ragdolls.includes(gb.rd)) grab[side] = null; else { gb.rd.pins[side].t.copy(p); gb.rd.life = Math.min(gb.rd.life, 1); } }
+    else if (gb?.kind === 'item') { const it = gb.it;
+      if (it.stuck) { // planted or hanging: it gives way once you pull hard enough
+        if (p.distanceTo(gb.start) > 0.1) { it.stuck = null; tone(it.type === 'turnip' ? 160 : 520, 0.06, 'triangle', 0.06); hiss(0.05, 0.12, it.type === 'turnip' ? 300 : 1200); pulse(side, 0.7, 40); if (it.type === 'turnip') burst(it.p, 0x5a3e24, 6, 1, 0.6); }
+        else if (Math.random() < dt * 30) pulse(side, 0.15, 10);
+      }
+      if (!it.stuck) { it.p.copy(p); it.q.copy(h.grip.getWorldQuaternion(_q1)); }
+      if (it.T.heal && !it.stuck && p.distanceTo(bodyPoint(0.08, 0.07, 0, _mouthPt)) < 0.15) { eatItem(it); grab[side] = null; pulse(side, 0.6, 60); } // a bite
+    }
     else if (gb?.kind === 'door') { // the door follows the hand around its hinge
       const d = gb.d, [lx, lz] = doorLocal(d, p.x, p.z), a = clamp(Math.atan2(-(lz - DOOR_Z), lx + 0.7), 0, DOOR_MAX);
       d.vel = lerp(d.vel, (a - d.ang) / Math.max(dt, 1e-3), 0.5); d.ang = a;
@@ -1798,7 +1969,7 @@ const barBg = new THREE.MeshBasicMaterial({ color: 0x220000, fog: false }), barF
 const enemies = []; const LOD_FAR = 24;
 function spawnEnemy(key, x, z) {
   const T = ENEMY_TYPES[key];
-  const mat = new THREE.MeshLambertMaterial({ color: T.color, flatShading: true, emissive: 0x000000 });
+  let mat = new THREE.MeshLambertMaterial({ color: T.color, flatShading: true, emissive: 0x000000 });
   const r = makeHumanoid({ skin: mat, top: mat, legs: ENEMY_LEGS[key], eye: T.boss ? matEyeBoss : matEye, chestW: T.chestW, hunch: T.hunch });
   const g = r.g;
   if (key === 'gloom') for (const sx of [-1, 1]) { const ear = _hm(HG.spike, mat, r.skull, sx * 0.11, 0.04, -0.01); ear.rotation.z = -sx * 1.2; ear.scale.set(0.8, 0.9, 0.8); }
@@ -1812,7 +1983,7 @@ function spawnEnemy(key, x, z) {
   }
   const bar = new THREE.Group(), bg = new THREE.Mesh(barGeo, barBg), fg = new THREE.Mesh(barGeo, barFg);
   bg.position.x = -0.5; fg.position.set(-0.5, 0, 0.002); bar.add(bg, fg); bar.position.y = 2.1; bar.visible = false; g.add(bar);
-  mergeRig(r, key);
+  const vc = new THREE.MeshLambertMaterial({ vertexColors: true, flatShading: true, emissive: 0x000000 }); mergeRig(r, key, { mat: vc }); mat.dispose(); mat = vc; // the merged body flashes when hit
   // far-away version: the whole body in its rest pose baked into one mesh per material (about 3 draw calls instead
   // of 12), shown beyond LOD_FAR where nobody can see the limbs move anyway
   g.updateMatrixWorld(true); const lod = new THREE.Group(); lod.visible = false;
@@ -2195,7 +2366,8 @@ function interactableAt(h) {
     for (const c of chests) INTERACT.push({ x: c.x, z: c.z, r: 2.4, chest: c, label: 'Open chest', act: () => openChest(c) });
   }
   let best = null, bd = 1e9;
-  { const d = doorAt(h, 1.9); if (d) { const w = houseToWorld(d.H, 0, DOOR_Z); bd = Math.hypot(h.x - w.x, h.z - w.z) + 0.6; best = d.item || (d.item = { act: () => { d.target = d.ang > 0.4 ? 0 : 1.5; d.auto = false; } }); best.label = d.ang > 0.4 ? 'Close the door' : 'Open the door'; } }
+  for (const it of items) { if (!it.T.heal || it.gone > 0 || it.held) continue; const dd = Math.hypot(h.x - it.p.x, h.z - it.p.z); if (dd < 1.4 && Math.abs(h.y - it.p.y) < 2.2 && dd < bd) { bd = dd; best = it.eatItem || (it.eatItem = { label: 'Eat the ' + it.T.name, act: () => eatItem(it) }); } }
+  { const d = doorAt(h, 1.9); const dw = d && houseToWorld(d.H, 0, DOOR_Z), dd = d ? Math.hypot(h.x - dw.x, h.z - dw.z) + 0.6 : 1e9; if (d && dd < bd) { bd = dd; best = d.item || (d.item = { act: () => { d.target = d.ang > 0.4 ? 0 : 1.5; d.auto = false; } }); best.label = d.ang > 0.4 ? 'Close the door' : 'Open the door'; } }
   for (const id in WEAPONS) { const w = WEAPONS[id]; if (w.state !== 'world' || w.flying) continue; const d = Math.hypot(h.x - w.p.x, h.z - w.p.z); if (d < 2.2 && d < bd) { bd = d; best = w.pickItem || (w.pickItem = { label: 'Pick up the ' + w.def.name, act: () => pickUpWeapon(w) }); } }
   for (const it of INTERACT) { if (it.chest && it.chest.opened) continue; const d = Math.hypot(h.x - it.x, h.z - it.z); if (d < it.r && d < bd) { bd = d; best = it; } }
   for (const n of villagers) { const d = Math.hypot(h.x - n.x, h.z - n.z) + 0.5; if (d - 0.5 < 2.4 && d < bd) { bd = d; best = n.talkItem || (n.talkItem = { act: () => villagerTalk(n) }); best.label = n.act === 'sleep' ? n.name + ' is asleep' : 'Talk to ' + n.name; } }
@@ -2370,12 +2542,12 @@ placePlayer(S.x, S.z); camera.rotation.set(0, yaw, 0);
   hidden.forEach(m => { m.visible = false; }); playerHands.left.g.removeFromParent();
   enemies.splice(enemies.indexOf(dummy), 1); scene.remove(dummy.g); dummy.mat.dispose();
 }
-const clock = new THREE.Clock(); let uiT = 0, saveT = 0;
+const clock = new THREE.Clock(); let uiT = 0, saveT = 0; var frameDt = 1 / 72; const perf = { upd: 0, ren: 0 };
 renderer.setAnimationLoop(() => {
-  const rawDt = clock.getDelta(); const dt = Math.min(rawDt, 0.05); time += dt; if (rawDt > 0) fpsNow = lerp(fpsNow, 1 / rawDt, 0.05);
-  pollPause();
+  const rawDt = clock.getDelta(); const dt = Math.min(rawDt, 0.05); frameDt = dt; time += dt; if (rawDt > 0) fpsNow = lerp(fpsNow, 1 / rawDt, 0.05);
+  pollPause(); const tU0 = performance.now();
   if (running && !paused) {
-    updateMovement(dt); updateDesktopWeapon(dt); updateHeldWeapons(dt); updateWorldWeapons(dt); updateArrows(dt); updateSpawns(dt); updateEnemies(dt); updateHands(dt); updateRagdolls(dt); syncArrows(); updateStones(dt); updatePickups(dt); updateNPCs(dt); updateVillagers(dt); updateDoors(dt); updateShadows(); updateAmbience(dt);
+    updateMovement(dt); updateDesktopWeapon(dt); updateHeldWeapons(dt); updateWorldWeapons(dt); updateArrows(dt); updateSpawns(dt); updateEnemies(dt); updateHands(dt); updateRagdolls(dt); syncArrows(); updateStones(dt); updateItems(dt); updatePickups(dt); updateNPCs(dt); updateVillagers(dt); updateDoors(dt); updateShadows(); updateAmbience(dt);
     if (interactQueued) { interactQueued = false; const it = interactableAt(headPos()); if (it) it.act(); }
     if (potionQueued) { potionQueued = false; drinkPotion(); }
     const h = headPos(); const it = interactableAt(h); setPrompt(it ? it.label : '');
@@ -2390,11 +2562,13 @@ renderer.setAnimationLoop(() => {
     yaw += dt * 0.05; camera.rotation.set(-0.05, yaw, 0);
   }
   updateFireGlow(dt);
-  for (let i = 0; i < flames.length; i++) { const f = flames[i]; f.scale.set(1 + Math.sin(time * 13 + i) * 0.12, 1 + Math.sin(time * 17 + i * 2) * 0.2, 1 + Math.cos(time * 11 + i) * 0.12); }
+  fireFlare = Math.max(0, fireFlare - dt); const fl = 1 + fireFlare * 0.4;
+  for (let i = 0; i < flames.length; i++) { const f = flames[i]; f.scale.set((1 + Math.sin(time * 13 + i) * 0.12) * fl, (1 + Math.sin(time * 17 + i * 2) * 0.2) * fl, (1 + Math.cos(time * 11 + i) * 0.12) * fl); }
   if (Math.random() < dt * 8) burst(_v3.set((Math.random() - 0.5) * 0.4, VH + 0.9, (Math.random() - 0.5) * 0.4), 0xff8a2a, 1, 0.4, 1.4);
   if (!paused) { updateSky(dt); updateParticles(dt); }
   drawHandFingers(playerHands.left); drawHandFingers(playerHands.right);
-  renderer.render(scene, camera);
+  const tR0 = performance.now(); renderer.render(scene, camera); const tR1 = performance.now();
+  perf.upd = lerp(perf.upd, tR0 - tU0, 0.05); perf.ren = lerp(perf.ren, tR1 - tR0, 0.05); // CPU ms: game update, and draw submission
 });
 addEventListener('beforeunload', () => { if (running) save(); });
 // ---------------------------------------------------------------- pause and save
@@ -2431,7 +2605,7 @@ addEventListener('keydown', e => { if (e.code === 'KeyP' && running && !inVR) se
 document.addEventListener('visibilitychange', () => { if (document.hidden && running) { save(); if (!inVR) setPaused(true); } }); // switching away saves (and pauses on a PC)
 renderer.xr.addEventListener('sessionstart', () => { const s = renderer.xr.getSession(); if (s) s.addEventListener('visibilitychange', () => { if (s.visibilityState !== 'visible') setPaused(true); }); }); // Quest menu or headset off
 if (['localhost', '127.0.0.1'].includes(location.hostname)) { // debug hooks for local testing only
-window.__emberwild = { doors, setPaused, isPaused: () => paused, weapons: WEAPONS, arrows, deskW: () => deskW, hipW: () => hipW, setDay: v => { dayT = v; }, getDay: () => dayT, SITES, chests, crystals, pickups, villagers, HOUSES, groundAt, houseToWorld, interactableAt, renderer, S, enemies, ragdolls, hitEnemy, playerHands, poseHand, stones, camera, npcs, makeRagdoll, stepRagdoll, heightAt, headPos, dolly, spawnEnemy, startSwing, placePlayer, setYaw: v => { yaw = v; } }; // debug hook
+window.__emberwild = { items, perf, doors, setPaused, isPaused: () => paused, weapons: WEAPONS, arrows, deskW: () => deskW, hipW: () => hipW, setDay: v => { dayT = v; }, getDay: () => dayT, SITES, chests, crystals, pickups, villagers, HOUSES, groundAt, houseToWorld, interactableAt, renderer, S, enemies, ragdolls, hitEnemy, playerHands, poseHand, stones, camera, npcs, makeRagdoll, stepRagdoll, heightAt, headPos, dolly, spawnEnemy, startSwing, placePlayer, setYaw: v => { yaw = v; } }; // debug hook
 // debug: fake VR controllers for testing grab logic on a desktop browser (no headset needed)
 window.__emberwild.simVR = () => {
   const mk = side => { const grip = new THREE.Group(); dolly.add(grip); const btn = () => ({ value: 0, pressed: false, touched: false }); const gamepad = { buttons: [btn(), btn(), btn(), btn(), btn(), btn(), btn()], axes: [0, 0, 0, 0], hapticActuators: [] }; hands[side] = { grip, src: { handedness: side, gamepad }, prev: [], isHand: false }; const ray = new THREE.Group(); grip.add(ray); rays[side] = ray; grip.add(playerHands[side].g); playerHands[side].g.rotation.set(0, 0, 0); return hands[side]; };
