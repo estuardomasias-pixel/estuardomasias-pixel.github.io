@@ -39,7 +39,7 @@ let S = structuredClone(DEFAULT);
 try { const s = JSON.parse(localStorage.getItem(SAVE_KEY) || 'null'); if (s) S = Object.assign(structuredClone(DEFAULT), s); } catch (e) { /* no storage */ }
 const maxHp = () => 100 + (S.level - 1) * 15;
 const xpNeed = () => Math.round(60 * Math.pow(S.level, 1.5));
-function save() { try { const h = headPos(); S.x = h.x; S.z = h.z; S.dayT = dayT; const held = ['left', 'right'].filter(k => grab[k]?.kind === 'potion').length; localStorage.setItem(SAVE_KEY, JSON.stringify({ ...S, potions: S.potions + held })); } catch (e) { } }
+function save() { try { const h = headPos(); S.x = h.x; S.z = h.z; S.dayT = dayT; const held = ['left', 'right'].filter(k => grab[k]?.kind === 'potion').length; if (Object.keys(WEAPONS).length) S.wpn = weaponSaveState(); localStorage.setItem(SAVE_KEY, JSON.stringify({ ...S, potions: S.potions + held })); } catch (e) { } }
 
 // ---------------------------------------------------------------- renderer / scene
 const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
@@ -684,7 +684,7 @@ makeVillager({ name: 'Woodcutter Bram', home: H_BLOCK, look: { skin: npcMat(0xd8
     { at: spot(VB.x + 0.95, VB.z + 0.3), act: 'chop', prop: 'axe', dur: 14, face: faceTo(VB.x + 0.95, VB.z + 0.3, VB.x, VB.z) },
     { at: spot(VP.x + 0.9, VP.z), act: 'stack', carry: 'log', dur: 3, face: -Math.PI / 2 },
     { at: spot(-1.6, -1.2), act: 'warm', dur: 7, face: faceTo(-1.6, -1.2, 0, 0) },
-  ], lines: ['Firewood keeps the Gloom at bay. Can\'t have too much of it.', 'Mind the axe, friend.', 'That fire burns all night. Somebody has to feed it.'] });
+  ], lines: ['There\'s a spare axe by my chopping block. Take it - it bites deeper than a sword.', 'Firewood keeps the Gloom at bay. Can\'t have too much of it.', 'Mind the axe, friend.', 'That fire burns all night. Somebody has to feed it.'] });
 makeVillager({ name: 'Ines the Cook', home: H_WELL, look: { skin: npcMat(0xb98a64), top: npcMat(0x8a6a2a), legs: npcMat(0x6a3a4a), boots: BOOTS, eye: NPC_EYE, chestW: 0.95 },
   day: [
     { at: inHouse(H_WELL, 1.6, -0.75), act: 'stir', prop: 'spoon', dur: 14, face: Math.PI, local: true },
@@ -726,18 +726,6 @@ function updateNPCs(dt) {
 }
 
 // ---------------------------------------------------------------- player gear
-const sword = new THREE.Group();
-{
-  const handle = new THREE.Mesh(new THREE.CylinderGeometry(0.02, 0.02, 0.17, 8), M.dark); handle.rotation.x = Math.PI / 2; handle.position.z = 0.03;
-  const pommel = new THREE.Mesh(new THREE.SphereGeometry(0.03, 8, 6), M.gold); pommel.position.z = 0.12;
-  const guard = new THREE.Mesh(new THREE.BoxGeometry(0.2, 0.03, 0.035), M.gold); guard.position.z = -0.06;
-  const blade = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.012, 0.82), new THREE.MeshLambertMaterial({ color: 0xd8dde6, emissive: 0x111111 })); blade.position.z = -0.48;
-  const edge = new THREE.Mesh(new THREE.BoxGeometry(0.012, 0.016, 0.78), M.ember); edge.position.z = -0.47;
-  const tip = new THREE.Mesh(new THREE.ConeGeometry(0.025, 0.08, 4), new THREE.MeshLambertMaterial({ color: 0xd8dde6 })); tip.rotation.x = -Math.PI / 2; tip.position.z = -0.93;
-  sword.add(handle, pommel, guard, blade, edge, tip);
-  sword.userData.edge = edge;
-}
-const HILT = new THREE.Vector3(0, 0, -0.1), TIP = new THREE.Vector3(0, 0, -0.95);
 const shield = new THREE.Group();
 {
   const disc = new THREE.Mesh(new THREE.CylinderGeometry(0.22, 0.22, 0.03, 16), new THREE.MeshLambertMaterial({ color: 0x7a4a22 }));
@@ -745,8 +733,6 @@ const shield = new THREE.Group();
   const boss = new THREE.Mesh(new THREE.SphereGeometry(0.05, 8, 6), M.gold); boss.position.y = 0.02;
   shield.add(disc, rim, boss); shield.rotation.z = Math.PI / 2; shield.position.set(-0.07, 0, 0.05);
 }
-function restSword() { sword.position.set(0.24, -0.24, -0.42); sword.rotation.set(0.7, 0.15, -0.25); } // low enough to stay out of the way, high enough that the glove shows
-camera.add(sword); restSword();
 
 // camera-attached panels (VR toast / prompt / hurt flash)
 const toastPanel = makePanel(0.9, 0.3, 900, 300); toastPanel.mesh.position.set(0, 0.12, -1.25); toastPanel.mesh.visible = false; camera.add(toastPanel.mesh);
@@ -765,7 +751,7 @@ for (let i = 0; i < 2; i++) {
     const side = src.handedness, isHand = !!src.hand;
     hands[side] = { grip, src, prev: [], isHand };
     const model = playerHands[side]; grip.add(model.g); model.g.position.set(0, 0, 0); model.g.rotation.set(0, 0, 0); model.g.visible = !isHand; // tracked hands draw their own joints
-    if (side === 'right') { if (swordInHand) holdSword(); }
+    if (side === 'right') weaponsToVR(); // the weapon you held on screen goes into your right hand
     else { grip.add(shield); grip.add(wrist.mesh); }
   });
   grip.addEventListener('disconnected', () => { for (const k of ['left', 'right']) if (hands[k] && hands[k].grip === grip) { resetHandState(k); hands[k] = null; } });
@@ -789,13 +775,12 @@ renderer.xr.addEventListener('sessionstart', () => {
 renderer.xr.addEventListener('sessionend', () => {
   // keep the player where their head was (room-scale offset), not where the dolly origin is
   _v1.set(camera.position.x, 0, camera.position.z).applyQuaternion(dolly.quaternion); dolly.position.x += _v1.x; dolly.position.z += _v1.z;
-  inVR = false; heightOffset = 0; deskSheathed = false; deskSheath = 0; sword.visible = true; yaw = dolly.rotation.y; dolly.rotation.y = 0; pitch = 0; camera.position.set(0, 1.6, 0);
+  weaponsToDesktop(); inVR = false; heightOffset = 0; yaw = dolly.rotation.y; dolly.rotation.y = 0; pitch = 0; camera.position.set(0, 1.6, 0);
   // WebXR overwrote the camera projection with the headset's; restore the flat-screen one
   camera.fov = 72; camera.zoom = 1; camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix();
   $('hud').style.display = running ? 'block' : 'none'; promptText = null;
   for (const side of ['left', 'right']) resetHandState(side);
-  swordInHand = true; scabbard.visible = false;
-  camera.add(sword); restSword(); attachDesktopHand(); shield.removeFromParent(); wrist.mesh.removeFromParent();
+  scabbard.visible = false; shield.removeFromParent(); wrist.mesh.removeFromParent();
   hands.left = hands.right = null;
 });
 function pulse(hand, intensity, ms) { try { hands[hand]?.src.gamepad?.hapticActuators?.[0]?.pulse(intensity, ms); } catch (e) { } }
@@ -879,15 +864,12 @@ function updateTrackedHands() {
 }
 const trackedHand = side => trackedHands.find(t => t.side === side && t.hand.visible);
 
-// ---------------------------------------------------------------- sword scabbard (left hip) and grabbing
-let swordInHand = true;
+// ---------------------------------------------------------------- hip slot (left hip, holds one weapon) and grabbing
 const scabbard = new THREE.Group(); scene.add(scabbard); scabbard.visible = false;
 {
   _hm(new THREE.BoxGeometry(0.075, 0.03, 0.86), M.dark, scabbard, 0, 0, -0.5); // sheath
   _hm(new THREE.BoxGeometry(0.09, 0.04, 0.05), M.gold, scabbard, 0, 0, -0.08); _hm(new THREE.BoxGeometry(0.08, 0.035, 0.04), M.gold, scabbard, 0, 0, -0.92);
 }
-function holdSword() { const r = hands.right; if (!r) return; sword.visible = true; r.grip.add(sword); sword.position.set(0, 0, 0); sword.rotation.set(-0.35, 0, 0); swordInHand = true; }
-function sheatheSword() { sword.visible = true; scabbard.add(sword); sword.position.set(0, 0, 0.02); sword.rotation.set(0, 0, 0); swordInHand = false; sfx.block(); }
 const bodyPoint = (down, fwd, side, out) => { const h = headPos(), f = forward2D(); return out.set(h.x + f.x * fwd - f.z * side, h.y - down, h.z + f.z * fwd + f.x * side); };
 const _sheathPt = new THREE.Vector3(), _pocketPt = new THREE.Vector3(), _mouthPt = new THREE.Vector3();
 function updateScabbard() {
@@ -952,18 +934,20 @@ function pullCandidate(side) {
   const test = (pos, c) => { _pv.subVectors(pos, _ro); const d = _pv.length(); if (d < 0.5 || d > 8) return; const cos = _pv.dot(_rdir) / d; if (cos > bc) { bc = cos; best = c; } };
   for (const st of stones) if (!st.held && !st.flying) test(st.p, { kind: 'stone', s: st });
   for (const pk of pickups) if (!pk.flying) test(pk.m.position, { kind: 'pickup', pk });
+  weaponPullCandidates(test);
   return best;
 }
-function startPull(side, c) { pulling[side] = c; if (c.s) { c.s.flying = side; c.s.rest = false; } else c.pk.flying = side; pulse(side, 0.4, 60); tone(520, 0.12, 'sine', 0.06, 300); }
-function cancelPull(side) { const c = pulling[side]; if (!c) return; pulling[side] = null; if (c.s) { c.s.flying = null; c.s.rest = false; } else c.pk.flying = null; }
+function startPull(side, c) { pulling[side] = c; if (c.s) { c.s.flying = side; c.s.rest = false; } else if (c.w) { c.w.flying = side; c.w.rest = false; } else c.pk.flying = side; pulse(side, 0.4, 60); tone(520, 0.12, 'sine', 0.06, 300); }
+function cancelPull(side) { const c = pulling[side]; if (!c) return; pulling[side] = null; if (c.s) { c.s.flying = null; c.s.rest = false; } else if (c.w) { c.w.flying = null; c.w.v.set(0, 0, 0); } else c.pk.flying = null; }
 function updatePull(side, p, dt) {
   const c = pulling[side]; if (!c) return;
-  const pos = c.s ? c.s.p : c.pk.m.position, d = pos.distanceTo(p);
+  const pos = c.s ? c.s.p : c.w ? c.w.p : c.pk.m.position, d = pos.distanceTo(p);
   pos.lerp(p, Math.min(1, dt * 7)); pos.y += Math.min(d, 2) * dt * 1.5; // flies to the hand in a slight arc
-  if (c.s) syncStone(c.s);
+  if (c.s) syncStone(c.s); else if (c.w) c.w.g.position.copy(c.w.p);
   if (d < 0.18) { // arrived
     pulling[side] = null;
     if (c.s) { c.s.flying = null; c.s.held = side; c.s.v.set(0, 0, 0); grab[side] = { kind: 'stone', s: c.s }; }
+    else if (c.w) { c.w.flying = null; holdInHand(c.w, side); }
     else { const i = pickups.indexOf(c.pk); if (i >= 0) pickups.splice(i, 1); scene.remove(c.pk.m); const m = makePotionMesh(); scene.add(m); grab[side] = { kind: 'potion', m }; sfx.pickup(); }
     pulse(side, 0.6, 50);
     if (!gripHeld[side] && GFX.grip !== 'toggle') releaseGrab(side, true); // let go mid-flight: it drops at your hand
@@ -991,6 +975,7 @@ function grabCandidate(side, p) {
   }
   for (const c of chests) if (!c.opened) { const d = _v3.set(c.x, c.g.position.y + 0.55, c.z).distanceTo(p) - 0.35; if (d < 0.12) consider(d + 0.03, { kind: 'chest', c }); }
   if (S.potions > 0 && bodyPoint(0.36, 0.12, 0, _pocketPt).distanceTo(p) < 0.2) consider(0.15, { kind: 'pocket' });
+  weaponGrabCandidates(side, p, consider);
   return best;
 }
 function tryGrab(side, p) {
@@ -999,6 +984,9 @@ function tryGrab(side, p) {
   if (c.kind === 'stone') { if (grab[other]?.s === c.s) releaseGrab(other, true); c.s.held = side; c.s.rest = false; grab[side] = { kind: 'stone', s: c.s }; }
   else if (c.kind === 'rag') { if (grab[other]?.rd === c.rd && grab[other].i === c.i) releaseGrab(other, true); c.rd.pins = c.rd.pins || {}; c.rd.pins[side] = { i: c.i, t: c.rd.P[c.i].p.clone() }; grab[side] = { kind: 'rag', rd: c.rd, i: c.i }; }
   else if (c.kind === 'chest') { openChest(c.c); pulse(side, 0.6, 60); return true; }
+  else if (c.kind === 'weapon') { holdInHand(c.w, side); return true; }
+  else if (c.kind === 'hip') { holdInHand(hipW, side); sfx.swing(); return true; }
+  else if (c.kind === 'nock') { grab[side] = { kind: 'arrow', w: c.w }; c.w.nockSide = side; tone(620, 0.05, 'triangle', 0.05); }
   else if (c.kind === 'pocket') { S.potions--; const m = makePotionMesh(); scene.add(m); grab[side] = { kind: 'potion', m }; sfx.pickup(); }
   else if (c.kind === 'pickup') { scene.remove(c.pk.m); pickups.splice(pickups.indexOf(c.pk), 1); const m = makePotionMesh(); scene.add(m); grab[side] = { kind: 'potion', m }; sfx.pickup(); }
   pulse(side, 0.5, 40); return true;
@@ -1017,6 +1005,12 @@ function releaseGrab(side, quiet) {
     const rd = gb.rd; if (rd.pins) delete rd.pins[side];
     if (!quiet && ragdolls.includes(rd)) { for (const pt of rd.P) pt.o.addScaledVector(v, -RAG_STEP * 0.35); rd.P[gb.i].o.copy(rd.P[gb.i].p).addScaledVector(v, -RAG_STEP); }
   }
+  else if (gb.kind === 'arrow') { // let go of the string: shoot if drawn far enough
+    const w = gb.w, d = bowDraw(w), hp = hands[side] ? hands[side].grip.getWorldPosition(new THREE.Vector3()) : null;
+    if (!quiet && hp && d > 0.1) { w.g.getWorldPosition(_bc); fireArrow(hp, _bc.clone().sub(hp).normalize(), 14 + 40 * d); pulse(side, 0.8, 40); if (w.side) pulse(w.side, 0.6, 30); }
+    w.nockSide = null; nockArrow.visible = false;
+  }
+  else if (gb.kind === 'weapon') { const w = gb.w; if (w.def.bow && w.nockSide) releaseGrab(w.nockSide, true); placeInWorld(w, w.g.position, w.q, quiet ? null : v.clone().multiplyScalar(0.5)); }
   else if (gb.kind === 'potion') { scene.remove(gb.m); S.potions++; if (!quiet) { sfx.coin(); toast('Potion stowed.', 1.2); } } // let go anywhere: it goes back in your pack
 }
 function updateHands(dt) {
@@ -1035,8 +1029,10 @@ function updateHands(dt) {
     const pressEdge = gripHeld[side] && !was, releaseEdge = !gripHeld[side] && was;
     if (th) { if (th.pinch && !th.pinchWas && side === 'right') interactQueued = true; th.pinchWas = th.pinch; }
     const toggleMode = GFX.grip === 'toggle';
-    if (side === 'right' && swordInHand) { // sword is sticky: grip near the left hip puts it away
-      if (pressEdge && p.distanceTo(_sheathPt) < 0.3) { sheatheSword(); pulse('right', 0.7, 50); }
+    const gw = grab[side]?.kind === 'weapon' ? grab[side] : null;
+    if (gw) { // weapons are sticky: squeeze at the left hip to put it away; squeeze and let go to drop it (let go mid-swing to throw it)
+      if (pressEdge) { if (!hipW && p.distanceTo(_sheathPt) < 0.3) { toHip(gw.w); pulse(side, 0.7, 50); } else gw.armDrop = true; }
+      else if (releaseEdge && gw.armDrop) { const v = handVel(side, _hv).clone(), w = gw.w; if (w.def.bow && w.nockSide) releaseGrab(w.nockSide, true); if (v.length() > 2.5) throwWeapon(w, w.g.position, w.q, v); else placeInWorld(w, w.g.position, w.q, v.multiplyScalar(0.5)); }
     } else if (grab[side]) {
       if ((toggleMode && pressEdge) || (!toggleMode && releaseEdge)) releaseGrab(side, false);
     } else if (pulling[side]) {
@@ -1044,21 +1040,21 @@ function updateHands(dt) {
     } else if (pressEdge) {
       if (!tryGrab(side, p)) {
         if (pullAim[side]) startPull(side, pullAim[side]); // pointing at something: pull it
-        else if (side === 'right') { holdSword(); sfx.swing(); pulse('right', 0.7, 50); } // nothing to grab: draw the sword
+        else if (side === 'right' && hipW) { holdInHand(hipW, 'right'); sfx.swing(); } // nothing to grab: draw the weapon from the hip
       }
     }
     updatePull(side, p, dt);
     // hover feedback
-    const free = !grab[side] && !pulling[side] && !(side === 'right' && swordInHand);
+    const free = !grab[side] && !pulling[side];
     const cand = free ? grabCandidate(side, p) : null, aim = free && !cand ? pullCandidate(side) : null; pullAim[side] = aim;
-    const key = cand ? (cand.s || cand.pk || cand.c || (cand.rd ? cand.rd.P[cand.i] : 'pocket')) : aim ? (aim.s || aim.pk) : null;
+    const key = cand ? (cand.s || cand.pk || cand.c || cand.w || (cand.rd ? cand.rd.P[cand.i] : cand.kind)) : aim ? (aim.s || aim.pk || aim.w) : null;
     if (key !== hover[side]) {
       if (stones.includes(hover[side])) highlightStone(hover[side], false); else if (pickups.includes(hover[side])) hover[side].m.scale.setScalar(1);
       if (key) pulse(side, 0.15, 15); hover[side] = key;
       if (key && stones.includes(key)) highlightStone(key, true); else if (key && pickups.includes(key)) key.m.scale.setScalar(1.35);
     }
     const al = aimLines[side]; al.visible = !!aim; // faint line to what a squeeze would pull
-    if (aim) { const a = al.geometry.attributes.position, t = aim.s ? aim.s.p : aim.pk.m.position; a.setXYZ(0, _ro.x, _ro.y, _ro.z); a.setXYZ(1, t.x, t.y, t.z); a.needsUpdate = true; }
+    if (aim) { const a = al.geometry.attributes.position, t = aim.s ? aim.s.p : aim.w ? aim.w.p : aim.pk.m.position; a.setXYZ(0, _ro.x, _ro.y, _ro.z); a.setXYZ(1, t.x, t.y, t.z); a.needsUpdate = true; }
     // carry the held thing
     const gb = grab[side];
     if (gb?.kind === 'stone') { gb.s.p.copy(p); syncStone(gb.s); }
@@ -1074,10 +1070,276 @@ function updateHands(dt) {
     if (!h.isHand) {
       const trig = gp?.buttons[0]?.value ?? 0, trigTouch = gp?.buttons[0]?.touched ? 0.25 : 0;
       const thumbTouch = [3, 4, 5, 6].some(i => gp?.buttons[i]?.touched) ? 0.85 : 0.15;
-      const holding = !!grab[side] || (side === 'right' && swordInHand);
+      const holding = !!grab[side];
       const sq = holding ? Math.max(0.85, squeeze) : squeeze, ix = holding ? Math.max(0.75, trig) : Math.max(trig, trigTouch);
       poseHand(playerHands[side], [holding ? 0.8 : thumbTouch, ix, sq, sq, sq], dt);
     }
+  }
+}
+
+// ---------------------------------------------------------------- weapons
+// Every weapon is a physical object that is always in exactly one place: in a VR hand ('hand'), on the flat-screen
+// camera ('desk'), hanging at the hip ('hip'), or lying / flying in the world ('world'). Melee damage comes from how
+// fast the tip moves; heavier weapons turn a little behind your hand (weight), and each hit has a short impact pause.
+// Weapon local space matches the VR grip: the blade runs along -Z from the grip, -Y points away from the wrist.
+const WDEF = {
+  sword: { name: 'Ember Sword', dmg: () => swordDamage(), butt: 0.15, hilt: -0.1, tip: -0.95, rotStiff: 90, minSpeed: 1.8, ref: 4.5, maxMult: 1.6, reach: 2.9, swing: 0.36, throwMult: 0.9 },
+  axe: { name: "Woodsman's Axe", dmg: () => 18 + 3 * S.level, butt: 0.12, hilt: -0.35, tip: -0.7, rotStiff: 40, minSpeed: 2.2, ref: 5, maxMult: 2.0, reach: 2.6, swing: 0.5, throwMult: 1.5 },
+  spear: { name: 'Hunting Spear', dmg: () => 14 + 2.5 * S.level, butt: 0.5, hilt: -0.6, tip: -1.62, rotStiff: 55, minSpeed: 1.6, ref: 4.5, maxMult: 1.5, reach: 3.7, swing: 0.42, throwMult: 2.4, thrust: true },
+  mace: { name: 'Iron Mace', dmg: () => 16 + 3 * S.level, butt: 0.1, hilt: -0.35, tip: -0.66, rotStiff: 35, minSpeed: 2.2, ref: 5, maxMult: 1.8, reach: 2.6, swing: 0.52, throwMult: 1.1, stun: 1.3 },
+  great: { name: 'Hollow Greatsword', dmg: () => 30 + 4 * S.level, butt: 0.3, hilt: -0.25, tip: -1.38, rotStiff: 26, minSpeed: 2.0, ref: 5.5, maxMult: 1.8, reach: 3.3, swing: 0.66, throwMult: 0.7 },
+  bow: { name: "Hunter's Bow", bow: true, dmg: () => 12 + 3 * S.level, butt: 0.6, hilt: 0.6, tip: -0.6, rotStiff: 90, throwMult: 0.3 },
+};
+// where the found-in-the-world weapons first lie (the greatsword is dropped by the Hollow King)
+const WSPAWN = { axe: () => [PROPS.block.x - 0.9, PROPS.block.z + 0.8], spear: () => [SITES.c1.x + 3, SITES.c1.z + 1.5], mace: () => [SITES.c2.x - 3, SITES.c2.z + 1.5], bow: () => [SITES.c0.x + 2.5, SITES.c0.z - 2] };
+const WMAT = { steel: new THREE.MeshLambertMaterial({ color: 0xd8dde6, emissive: 0x111111 }), iron: new THREE.MeshLambertMaterial({ color: 0x6a6a72, flatShading: true }), dark: new THREE.MeshLambertMaterial({ color: 0x2a1c26, emissive: 0x1a0820 }) };
+function buildWeapon(id) {
+  const g = new THREE.Group();
+  const part = (geo, mat, x, y, z, rx = 0, ry = 0, rz = 0) => { const m = new THREE.Mesh(geo, mat); m.position.set(x, y, z); m.rotation.set(rx, ry, rz); g.add(m); return m; };
+  const rod = (r, len, mat, z) => part(new THREE.CylinderGeometry(r, r, len, 7), mat, 0, 0, z, Math.PI / 2);
+  if (id === 'sword') {
+    rod(0.02, 0.17, M.dark, 0.03); part(new THREE.SphereGeometry(0.03, 8, 6), M.gold, 0, 0, 0.12); part(new THREE.BoxGeometry(0.2, 0.03, 0.035), M.gold, 0, 0, -0.06);
+    part(new THREE.BoxGeometry(0.05, 0.012, 0.82), WMAT.steel, 0, 0, -0.48); g.userData.edge = part(new THREE.BoxGeometry(0.012, 0.016, 0.78), M.ember, 0, 0, -0.47);
+    part(new THREE.ConeGeometry(0.025, 0.08, 4), WMAT.steel, 0, 0, -0.93, -Math.PI / 2);
+  } else if (id === 'axe') {
+    rod(0.02, 0.82, M.wood, -0.29); part(new THREE.BoxGeometry(0.03, 0.12, 0.13), WMAT.iron, 0, -0.04, -0.62); part(new THREE.BoxGeometry(0.02, 0.06, 0.19), WMAT.steel, 0, -0.12, -0.62);
+  } else if (id === 'spear') {
+    rod(0.017, 2.0, M.wood, -0.5); part(new THREE.ConeGeometry(0.035, 0.22, 4), WMAT.steel, 0, 0, -1.6, -Math.PI / 2); part(new THREE.CylinderGeometry(0.025, 0.025, 0.05, 6), M.gold, 0, 0, -1.48, Math.PI / 2);
+  } else if (id === 'mace') {
+    rod(0.022, 0.62, M.wood, -0.2); part(new THREE.IcosahedronGeometry(0.085, 0), WMAT.iron, 0, 0, -0.58);
+    for (let k = 0; k < 6; k++) { const a = k / 6 * Math.PI * 2; part(new THREE.ConeGeometry(0.025, 0.08, 4), WMAT.iron, Math.cos(a) * 0.09, Math.sin(a) * 0.09, -0.58, 0, 0, a - Math.PI / 2); }
+  } else if (id === 'great') {
+    rod(0.025, 0.3, M.dark, 0.1); part(new THREE.SphereGeometry(0.04, 8, 6), M.gold, 0, 0, 0.27); part(new THREE.BoxGeometry(0.34, 0.04, 0.05), M.gold, 0, 0, -0.06);
+    part(new THREE.BoxGeometry(0.085, 0.016, 1.22), WMAT.dark, 0, 0, -0.7); g.userData.edge = part(new THREE.BoxGeometry(0.014, 0.02, 1.16), new THREE.MeshBasicMaterial({ color: 0xa040ff }), 0, 0, -0.69);
+    part(new THREE.ConeGeometry(0.042, 0.12, 4), WMAT.dark, 0, 0, -1.37, -Math.PI / 2);
+  } else if (id === 'bow') { // riser along Z in the hand, limbs bend back toward the archer (+Y), string at y = 0.12
+    rod(0.022, 0.2, M.dark, 0);
+    for (const sz of [-1, 1]) { const limb = part(new THREE.CylinderGeometry(0.012, 0.018, 0.52, 6), M.wood, 0, 0.06, sz * 0.35, Math.PI / 2 + sz * 0.25); limb.userData.limb = true; }
+    const sg = new THREE.BufferGeometry(); sg.setAttribute('position', new THREE.BufferAttribute(new Float32Array(9), 3));
+    const str = new THREE.Line(sg, new THREE.LineBasicMaterial({ color: 0xeeeeee })); str.frustumCulled = false; g.add(str); g.userData.string = str;
+  }
+  return g;
+}
+// arrows: one instanced mesh for all of them
+const ARROW_MAX = 30, arrows = [];
+const arrowMesh = (() => {
+  const parts = [{ geo: new THREE.CylinderGeometry(0.008, 0.008, 0.72, 5).rotateX(Math.PI / 2), m: new THREE.Matrix4() },
+    { geo: new THREE.ConeGeometry(0.018, 0.07, 4).rotateX(-Math.PI / 2), m: new THREE.Matrix4().makeTranslation(0, 0, -0.39) },
+    { geo: new THREE.BoxGeometry(0.004, 0.05, 0.1), m: new THREE.Matrix4().makeTranslation(0, 0, 0.3) }];
+  const im = new THREE.InstancedMesh(mergeGeos(parts), new THREE.MeshLambertMaterial({ color: 0xcfb38a }), ARROW_MAX);
+  im.frustumCulled = false; im.count = 0; scene.add(im); return im;
+})();
+const nockArrow = new THREE.Mesh(arrowMesh.geometry, arrowMesh.material); nockArrow.visible = false; scene.add(nockArrow);
+
+const WEAPONS = {};
+let deskW = null, hipW = null;
+const HOLD_Q = new THREE.Quaternion().setFromEuler(new THREE.Euler(-0.35, 0, 0)), HOLD_Q_BOW = new THREE.Quaternion();
+const holdQ = w => (w.def.bow ? HOLD_Q_BOW : HOLD_Q);
+function makeWeapon(id) {
+  const w = { id, def: WDEF[id], g: buildWeapon(id), state: 'world', side: null, p: new THREE.Vector3(), v: new THREE.Vector3(), q: new THREE.Quaternion(), spin: new THREE.Vector3(),
+    rest: true, tipPrev: new THREE.Vector3(), havePrev: false, tipSpeed: 0, whoosh: 0, hitStop: 0, nockSide: null, sparkle: Math.random() * 2 };
+  WEAPONS[id] = w; return w;
+}
+const _wa = new THREE.Vector3(), _wb = new THREE.Vector3(), _wq = new THREE.Quaternion(), _wm = new THREE.Matrix4(), _wv = new THREE.Vector3();
+const wPoint = (w, z, out) => out.set(0, 0, z).applyQuaternion(w.state === 'world' ? w.q : w.g.getWorldQuaternion(_wq)).add(w.state === 'world' ? w.p : w.g.getWorldPosition(_wv));
+function detach(w) {
+  if (w.state === 'hand' && grab[w.side]?.w === w) grab[w.side] = null;
+  if (deskW === w) { deskW = null; if (playerHands.right.g.parent === w.g) playerHands.right.g.removeFromParent(); }
+  if (hipW === w) hipW = null;
+  w.g.removeFromParent(); w.side = null;
+}
+function placeInWorld(w, pos, q, vel) {
+  detach(w); w.state = 'world'; w.p.copy(pos); w.q.copy(q); w.v.copy(vel || _wa.set(0, 0, 0)); w.rest = false; w.spin.set(0, 0, 0);
+  w.g.position.copy(w.p); w.g.quaternion.copy(w.q); w.g.scale.setScalar(1); scene.add(w.g);
+}
+function holdInHand(w, side) {
+  const cur = grab[side]; if (cur) releaseGrab(side, true);
+  detach(w); w.state = 'hand'; w.side = side; w.havePrev = false; grab[side] = { kind: 'weapon', w };
+  hands[side].grip.getWorldQuaternion(w.q).multiply(holdQ(w)); scene.add(w.g); pulse(side, 0.5, 40);
+}
+function equipDesk(w) {
+  detach(w); w.state = 'desk'; deskW = w; camera.add(w.g); w.g.visible = true; deskRest(w);
+  const m = playerHands.right; w.g.add(m.g); m.g.position.set(0, 0, 0); m.g.quaternion.copy(holdQ(w)).invert(); m.g.visible = true; poseHand(m, [0.8, 0.9, 1, 1, 1], 1);
+}
+function toHip(w, quiet) {
+  detach(w); w.state = 'hip'; hipW = w; scabbard.add(w.g); w.g.position.set(0, 0, 0.02); w.g.quaternion.identity(); w.g.visible = true; if (!quiet) sfx.block();
+}
+function deskRest(w) {
+  const g = w.g;
+  if (w.def.bow) { g.position.set(-0.13, -0.17, -0.55); g.rotation.set(Math.PI / 2, 0, 0.12); }
+  else if (w.def.thrust) { g.position.set(0.22, -0.3, -0.25); g.rotation.set(0.25, 0.05, -0.1); }
+  else { g.position.set(0.24, -0.24, -0.42); g.rotation.set(0.7, 0.15, -0.25); }
+}
+// throwing: spears fly point-first, everything else tumbles
+function throwWeapon(w, pos, q, vel) {
+  placeInWorld(w, pos, q, vel); const sp = vel.length();
+  if (!w.def.thrust) w.spin.set(-sp * 2.2, 0, 0); // tumble end over end
+  tone(220, 0.15, 'triangle', 0.06, -80);
+}
+
+// --- VR: held weapons follow the hand with a little rotational lag (weight); melee hits from tip speed
+function updateHeldWeapons(dt) {
+  for (const side of ['left', 'right']) {
+    const gb = grab[side]; if (!gb || gb.kind !== 'weapon' || !hands[side]) continue;
+    const w = gb.w, def = w.def, grip = hands[side].grip;
+    grip.getWorldPosition(w.g.position); grip.getWorldQuaternion(_wq).multiply(holdQ(w));
+    w.hitStop -= dt; if (w.hitStop <= 0) w.q.slerp(_wq, 1 - Math.exp(-def.rotStiff * dt)); // during an impact pause the blade holds still
+    w.g.quaternion.copy(w.q);
+    if (def.bow) { updateBowString(w); continue; }
+    w.g.updateMatrixWorld(true);
+    const tipW = w.g.localToWorld(_swTip.set(0, 0, def.tip)), hiltW = w.g.localToWorld(_swHilt.set(0, 0, def.hilt));
+    const tipL = dolly.worldToLocal(_swTipL.copy(tipW)), velW = _swVel.set(0, 0, 0);
+    if (w.havePrev) velW.subVectors(tipL, w.tipPrev).divideScalar(Math.max(dt, 1e-3)).applyQuaternion(dolly.quaternion);
+    w.tipPrev.copy(tipL); w.havePrev = true; const sp = velW.length();
+    pushRagdollsWithBlade(hiltW, tipW, velW);
+    w.tipSpeed = lerp(w.tipSpeed, sp, 0.5); w.whoosh -= dt;
+    if (w.tipSpeed > def.minSpeed + 2.2 && w.whoosh <= 0) { sfx.swing(); w.whoosh = 0.4; }
+    if (w.g.userData.edge) w.g.userData.edge.material.color.setHex(w.tipSpeed > def.minSpeed ? (w.id === 'great' ? 0xd28aff : 0xffd27a) : (w.id === 'great' ? 0xa040ff : 0xff7a1a));
+    if (w.tipSpeed < def.minSpeed) continue;
+    const h = headPos(), mult = clamp(w.tipSpeed / def.ref, 0.6, def.maxMult);
+    for (const e of enemies) {
+      if (e.dead || e.hitCd > 0 || enemyBladeDist(e, hiltW, tipW) >= e.rad + 0.1) continue;
+      if (hitEnemy(e, mult, h.x, h.z, _swImp.copy(velW).clampLength(0, 12), def.dmg(), def.stun)) { w.hitStop = 0.06; e.freeze = 0.06; pulse(side, 1, 70); }
+    }
+  }
+}
+// --- bow: the other hand squeezes near the bow to nock an arrow, pulls back, and lets go to shoot
+const _bc = new THREE.Vector3(), _bs = new THREE.Vector3(), _bt = new THREE.Vector3(), _bb = new THREE.Vector3();
+function bowDraw(w) { // 0..1, how far the nocking hand has pulled the string back
+  if (!w.nockSide || !hands[w.nockSide]) return 0;
+  const hp = hands[w.nockSide].grip.getWorldPosition(_bt); w.g.localToWorld(_bs.set(0, 0.12, 0)); w.g.getWorldPosition(_bc);
+  _bb.set(0, 1, 0).applyQuaternion(w.g.getWorldQuaternion(_wq)); // toward the archer
+  return clamp(_wa.subVectors(hp, _bs).dot(_bb) / 0.62, 0, 1);
+}
+function updateBowString(w) {
+  const str = w.g.userData.string, a = str.geometry.attributes.position, d = bowDraw(w);
+  a.setXYZ(0, 0, 0.12, 0.6); a.setXYZ(2, 0, 0.12, -0.6);
+  if (d > 0 && w.nockSide) { const hp = hands[w.nockSide].grip.getWorldPosition(_bt); const loc = w.g.worldToLocal(hp.clone()); a.setXYZ(1, 0, loc.y, 0); }
+  else a.setXYZ(1, 0, 0.12, 0);
+  a.needsUpdate = true;
+  nockArrow.visible = !!w.nockSide && w.state === 'hand';
+  if (nockArrow.visible) { // the arrow lies from the drawing hand through the bow
+    const hp = hands[w.nockSide].grip.getWorldPosition(_bt); w.g.getWorldPosition(_bc);
+    nockArrow.position.copy(hp).lerp(_bc, 0.5); nockArrow.quaternion.setFromUnitVectors(_wa.set(0, 0, -1), _wb.subVectors(_bc, hp).normalize());
+    if (d > 0.05 && Math.random() < d * 0.3) pulse(w.nockSide, 0.05 + d * 0.15, 10); // string tension
+  }
+}
+function fireArrow(origin, dir, speed) {
+  let a = arrows.find(x => !x.alive); if (!a) { if (arrows.length < ARROW_MAX) { a = { p: new THREE.Vector3(), v: new THREE.Vector3(), q: new THREE.Quaternion(), prev: new THREE.Vector3() }; arrows.push(a); } else a = arrows.reduce((o, x) => (x.t > o.t ? x : o), arrows[0]); }
+  a.alive = true; a.stuck = false; a.t = 0; a.p.copy(origin); a.v.copy(dir).multiplyScalar(speed); a.q.setFromUnitVectors(_wa.set(0, 0, -1), dir);
+  hiss(0.12, 0.2, 2200); tone(180, 0.08, 'triangle', 0.08, 120);
+}
+function updateArrows(dt) {
+  let n = 0;
+  for (const a of arrows) {
+    if (!a.alive) continue; a.t += dt;
+    if (!a.stuck) {
+      a.prev.copy(a.p); a.v.y -= 9.8 * dt; a.p.addScaledVector(a.v, dt); a.q.setFromUnitVectors(_wa.set(0, 0, -1), _wb.copy(a.v).normalize());
+      const sp = a.v.length(), h = headPos();
+      for (const e of enemies) if (!e.dead && enemyBladeDist(e, a.prev, a.p) < e.rad + 0.05) { hitEnemy(e, clamp(sp / 30, 0.4, 1.4), h.x, h.z, _wv.copy(a.v).multiplyScalar(0.3), WDEF.bow.dmg()); a.alive = false; break; }
+      if (!a.alive) continue;
+      for (const rd of ragdolls) for (const pt of rd.P) if (pt.p.distanceTo(a.p) < pt.r + 0.05) { nudgeRagdoll(rd, a.v, 0.15); break; }
+      const gy = groundAt(a.p.x, a.p.z); if (a.p.y <= gy + 0.02) { a.p.y = gy + 0.05; a.stuck = true; tone(140, 0.05, 'square', 0.04); } // sticks in the ground
+      if (a.t > 6) a.alive = false;
+    } else if (a.t > 15) { a.alive = false; continue; }
+    _wm.compose(a.p, a.q, _wb.set(1, 1, 1)); arrowMesh.setMatrixAt(n++, _wm);
+  }
+  arrowMesh.count = n; arrowMesh.instanceMatrix.needsUpdate = true;
+}
+// --- weapons lying in or flying through the world
+const _lyQ = new THREE.Quaternion(), _lyM = new THREE.Matrix4(), _dq = new THREE.Quaternion(), _ey = new THREE.Euler();
+function updateWorldWeapons(dt) {
+  const h = headPos();
+  for (const id in WEAPONS) {
+    const w = WEAPONS[id]; if (w.state !== 'world' || w.flying) continue;
+    if (w.rest) { // gentle golden sparkle so weapons in the world can be spotted
+      w.sparkle -= dt; if (w.sparkle <= 0 && w.p.distanceTo(h) < 45) { w.sparkle = 1.4; burst(_wa.copy(w.p).add(_wb.set(0, 0.15, 0)), 0xffd27a, 2, 0.4, 0.8); }
+      continue;
+    }
+    w.v.y -= 9.8 * dt; w.p.addScaledVector(w.v, dt);
+    const [cx, cz] = collide(w.p.x, w.p.z, 0.1); if (cx !== w.p.x || cz !== w.p.z) { w.p.x = cx; w.p.z = cz; w.v.x *= -0.3; w.v.z *= -0.3; } // walls
+    const sp = w.v.length();
+    if (w.def.thrust && sp > 4) w.q.setFromUnitVectors(_wa.set(0, 0, -1), _wb.copy(w.v).normalize()); // spears fly point-first
+    else if (w.spin.lengthSq() > 1e-4) { _dq.setFromEuler(_ey.set(w.spin.x * dt, w.spin.y * dt, w.spin.z * dt)); w.q.multiply(_dq); }
+    // thrown weapons hurt
+    if (sp > 5) {
+      const a = wPoint(w, w.def.hilt, _wa), b = wPoint(w, w.def.tip, _wb);
+      for (const e of enemies) if (!e.dead && e.hitCd <= 0 && enemyBladeDist(e, a, b) < e.rad + 0.05) {
+        hitEnemy(e, clamp(sp / 12, 0.4, 1.3), h.x, h.z, _wv.copy(w.v).multiplyScalar(0.4), w.def.dmg() * w.def.throwMult, w.def.stun); w.v.multiplyScalar(-0.25); w.spin.multiplyScalar(0.5); break;
+      }
+      for (const rd of ragdolls) for (const pt of rd.P) if (distPointSeg(pt.p, a, b) < pt.r + 0.05) { nudgeRagdoll(rd, w.v, 0.3); break; }
+    }
+    // ground: the lower end of the weapon can't go under; bounce, then settle lying flat
+    const a = wPoint(w, w.def.butt, _wa), b = wPoint(w, w.def.tip, _wb); // back end and tip
+    const low = Math.min(a.y - groundAt(a.x, a.z), b.y - groundAt(b.x, b.z));
+    if (low < 0.02) {
+      w.p.y += 0.02 - low;
+      if (w.v.y < -1.5) tone(260 + Math.random() * 80, 0.06, 'square', 0.05);
+      if (w.v.y < 0) w.v.y = -w.v.y * 0.25; w.v.x *= 0.6; w.v.z *= 0.6; w.spin.multiplyScalar(0.5);
+      if (sp < 0.6) { // lie flat: blade horizontal, flat side down
+        const dir = _wa.set(0, 0, -1).applyQuaternion(w.q); dir.y = 0; if (dir.lengthSq() < 1e-4) dir.set(0, 0, -1); dir.normalize();
+        _lyM.makeBasis(_wb.set(0, 1, 0).cross(dir.clone().negate()).normalize(), _v4.set(0, 1, 0), dir.clone().negate()); _lyQ.setFromRotationMatrix(_lyM);
+        w.q.slerp(_lyQ, Math.min(1, dt * 8)); w.spin.set(0, 0, 0);
+        if (sp < 0.15 && w.q.angleTo(_lyQ) < 0.05) { w.rest = true; w.v.set(0, 0, 0); w.p.y = groundAt(w.p.x, w.p.z) + 0.04; }
+      }
+    }
+    w.g.position.copy(w.p); w.g.quaternion.copy(w.q);
+  }
+}
+// grabbing support used by the hand code
+function weaponGrabCandidates(side, p, consider) {
+  for (const id in WEAPONS) {
+    const w = WEAPONS[id]; if (w.state !== 'world') continue;
+    const d = distPointSeg(p, wPoint(w, w.def.butt, _wa), wPoint(w, w.def.tip, _wb)); if (d < 0.15) consider(d - 0.02, { kind: 'weapon', w });
+  }
+  if (hipW && p.distanceTo(_sheathPt) < 0.3) consider(0.05, { kind: 'hip' });
+  const other = side === 'left' ? 'right' : 'left', ob = grab[other]?.w; // nock an arrow on a bow held in the other hand
+  if (ob && ob.def.bow && !ob.nockSide && p.distanceTo(ob.g.getWorldPosition(_wa)) < 0.3) consider(0.01, { kind: 'nock', w: ob });
+}
+function weaponPullCandidates(test) { for (const id in WEAPONS) { const w = WEAPONS[id]; if (w.state === 'world' && !w.flying) test(w.p, { kind: 'weapon', w }); } }
+// flat screen: one weapon in hand; F swaps it with the hip, G drops it, E picks one up, click attacks (or draws the bow)
+function deskSwap() {
+  if (deskW && hipW) { const a = deskW, b = hipW; toHip(a); equipDesk(b); }
+  else if (deskW) toHip(deskW);
+  else if (hipW) { equipDesk(hipW); sfx.swing(); }
+}
+function deskDrop() {
+  if (!deskW || inVR) return; const f = forward2D(), h = headPos();
+  placeInWorld(deskW, _wa.set(h.x + f.x * 0.7, h.y - 0.6, h.z + f.z * 0.7), _wq.setFromEuler(_ey.set(0, Math.atan2(-f.x, -f.z), 0)), _wb.set(f.x * 1.2, 0.8, f.z * 1.2));
+}
+function pickUpWeapon(w) {
+  if (inVR) { const side = grab.right ? (grab.left ? 'right' : 'left') : 'right'; if (grab[side]?.kind === 'weapon') { const cur = grab[side].w; if (!hipW) toHip(cur); else releaseGrab(side, true); } holdInHand(w, side); }
+  else { if (deskW) { if (!hipW) toHip(deskW); else deskDrop(); } equipDesk(w); }
+  sfx.pickup(); toast(`Picked up the ${w.def.name}.`, 2.5, true);
+}
+// VR <-> flat screen hand-over
+function weaponsToVR() { if (deskW && hands.right) { const w = deskW; holdInHand(w, 'right'); } }
+function weaponsToDesktop() {
+  let main = null;
+  for (const side of ['right', 'left']) {
+    const gb = grab[side]; if (gb?.kind === 'arrow') { grab[side] = null; gb.w.nockSide = null; continue; }
+    if (gb?.kind !== 'weapon') continue; const w = gb.w; grab[side] = null; w.nockSide = null;
+    if (!main) main = w; else if (!hipW) toHip(w); else { const h = headPos(); placeInWorld(w, _wa.set(h.x, groundAt(h.x, h.z) + 0.3, h.z), w.q); }
+  }
+  nockArrow.visible = false;
+  if (main) equipDesk(main); else if (!deskW && hipW) equipDesk(hipW);
+}
+// save / load
+function weaponSaveState() {
+  const out = {};
+  for (const id in WEAPONS) { const w = WEAPONS[id]; out[id] = w.state === 'desk' || w.state === 'hand' ? 'hand' : w.state === 'hip' ? 'hip' : [+w.p.x.toFixed(2), +w.p.y.toFixed(2), +w.p.z.toFixed(2)]; }
+  return out;
+}
+function initWeapons() {
+  const st = S.wpn || { sword: 'hand' };
+  for (const id of Object.keys(WSPAWN)) if (!(id in st)) st[id] = WSPAWN[id]();
+  if (S.stage >= 6 && !('great' in st)) st.great = [SITES.tower.x - 6, 0, SITES.tower.z - 6];
+  let handed = false;
+  for (const id in st) {
+    if (!WDEF[id]) continue; const w = makeWeapon(id), v = st[id];
+    if (v === 'hand' && !handed) { equipDesk(w); handed = true; }
+    else if ((v === 'hip' || v === 'hand') && !hipW) toHip(w, true);
+    else { const a = Array.isArray(v) ? v : [0, 9], x = a[0], z = a.length === 2 ? a[1] : a[2], y = a.length === 2 ? 0 : a[1]; placeInWorld(w, _wa.set(x, Math.max(y, groundAt(x, z) + 0.3), z), _wq.setFromEuler(_ey.set(0, Math.random() * 6.28, 0))); }
   }
 }
 
@@ -1252,9 +1514,10 @@ function enemyCenter(e, out) { return out.set(e.x, e.g.position.y + 1.1 * e.T.sc
 function enemyBladeDist(e, a, b) { let m = 1e9; for (const f of [0.5, 1.05, 1.55]) m = Math.min(m, distPointSeg(_ebd.set(e.x, e.g.position.y + f * e.T.scale, e.z), a, b)); return m; }
 const _ebd = new THREE.Vector3();
 // impulse: world-space velocity (m/s) of the blow, used for knockback, flinch and the death ragdoll
-function hitEnemy(e, mult, fromX, fromZ, impulse, base) { // base: damage before mult (defaults to the sword's)
+function hitEnemy(e, mult, fromX, fromZ, impulse, base, stun) { // base: damage before mult (defaults to the sword's); stun: seconds
   if (e.dead || e.hitCd > 0) return false;
   let dmg = (base ?? swordDamage()) * mult; const crit = Math.random() < 0.12; if (crit) dmg *= 1.8;
+  if (stun) { e.stun = Math.max(e.stun || 0, stun * (e.T.boss ? 0.4 : 1)); burst(enemyCenter(e, new THREE.Vector3()).add(_v2.set(0, 0.6 * e.T.scale, 0)), 0xffee55, 10, 1.2, 1); }
   e.hp -= dmg; e.hitCd = 0.32; e.flash = 0.15; e.aggro = true;
   const dx = e.x - fromX, dz = e.z - fromZ, d = Math.hypot(dx, dz) || 1;
   const imp = impulse ? impulse.clone() : new THREE.Vector3(dx / d * 6 * mult, 1, dz / d * 6 * mult);
@@ -1274,6 +1537,7 @@ function killEnemy(e, imp) {
   gainXP(Math.round(e.T.xp * (1 + 0.1 * (S.level - 1))));
   if (Math.random() < (e.T.boss ? 1 : e.key === 'thorn' ? 0.35 : 0.18)) spawnPickup('potion', e.x, e.z);
   if (S.stage === 1 && !e.T.boss) { S.qKills++; if (S.qKills >= 5) { S.stage = 2; sfx.quest(); toast('Quest updated: The Gloom creatures scatter! Return to Elder Maren.', 4); save(); } }
+  if (e.T.boss && !WEAPONS.great) { const w = makeWeapon('great'); placeInWorld(w, new THREE.Vector3(e.x, groundAt(e.x, e.z) + 1.6, e.z), new THREE.Quaternion(), new THREE.Vector3(0, 3, 0)); toast("The Hollow King's greatsword clatters to the ground!", 5); }
   if (e.T.boss && S.stage === 5) { S.stage = 6; sfx.quest(); toast('The Hollow King is no more! The Gloom recedes... Return to Elder Maren.', 6); save(); }
 }
 
@@ -1401,6 +1665,8 @@ function updateEnemies(dt) {
     const dx = h.x - e.x, dz = h.z - e.z, dist = Math.hypot(dx, dz);
     if (dist > 130 && !e.T.boss) { e.remove = true; continue; }
     e.hitCd -= dt; e.atkCd -= dt;
+    if (e.freeze > 0) { e.freeze -= dt; continue; } // impact pause
+    const stunned = e.stun > 0; if (stunned) e.stun -= dt;
     const range = isNight() ? 24 : 17;
     const homeD = e.home ? Math.hypot(e.x - e.home.x, e.z - e.home.z) : 0;
     if (e.home && (homeD > 40 || dist > 60)) e.leash = true; else if (e.home && homeD < 3) e.leash = false; // the boss never strays far from its tower
@@ -1408,7 +1674,8 @@ function updateEnemies(dt) {
     else if (dist < range) e.aggro = true; else if (dist > range * 1.8 && !e.T.boss) e.aggro = false;
     if (e.T.boss && dist > 80) { e.hp = e.maxHp; e.bar.visible = false; }
     let mx = 0, mz = 0; const reach = e.rad + 0.75;
-    if (e.aggro) {
+    if (stunned) { e.tiltV += Math.sin(time * 18) * 0.6; } // dazed: no moving or attacking
+    else if (e.aggro) {
       if (dist > reach) { mx = dx / dist * e.T.speed; mz = dz / dist * e.T.speed; }
       else if (e.atkCd <= 0) {
         e.atkCd = e.T.boss ? 1.6 : 1.35; e.lunge = 0.3;
@@ -1491,6 +1758,7 @@ function interactableAt(h) {
     for (const c of chests) INTERACT.push({ x: c.x, z: c.z, r: 2.4, chest: c, label: 'Open chest', act: () => openChest(c) });
   }
   let best = null, bd = 1e9;
+  for (const id in WEAPONS) { const w = WEAPONS[id]; if (w.state !== 'world' || w.flying) continue; const d = Math.hypot(h.x - w.p.x, h.z - w.p.z); if (d < 2.2 && d < bd) { bd = d; best = w.pickItem || (w.pickItem = { label: 'Pick up the ' + w.def.name, act: () => pickUpWeapon(w) }); } }
   for (const it of INTERACT) { if (it.chest && it.chest.opened) continue; const d = Math.hypot(h.x - it.x, h.z - it.z); if (d < it.r && d < bd) { bd = d; best = it; } }
   for (const n of villagers) { const d = Math.hypot(h.x - n.x, h.z - n.z) + 0.5; if (d - 0.5 < 2.4 && d < bd) { bd = d; best = n.talkItem || (n.talkItem = { act: () => villagerTalk(n) }); best.label = n.act === 'sleep' ? n.name + ' is asleep' : 'Talk to ' + n.name; } }
   return best;
@@ -1515,52 +1783,57 @@ function openChest(c) {
 // ---------------------------------------------------------------- input
 function lockPointer() { try { const p = renderer.domElement.requestPointerLock(); if (p && p.catch) p.catch(() => {}); } catch (e) { } }
 const keys = {}; let interactQueued = false, potionQueued = false, locked = false, running = false;
-addEventListener('keydown', e => { keys[e.code] = true; if (!running) return; if (e.code === 'KeyE') interactQueued = true; if (e.code === 'KeyQ') potionQueued = true; if (e.code === 'Space') { e.preventDefault(); jump(); } if (e.code === 'KeyF') toggleDesktopSword(); });
+addEventListener('keydown', e => { keys[e.code] = true; if (!running) return; if (e.code === 'KeyE') interactQueued = true; if (e.code === 'KeyQ') potionQueued = true; if (e.code === 'Space') { e.preventDefault(); jump(); } if (e.code === 'KeyF') startSwap(); if (e.code === 'KeyG') deskDrop(); });
 addEventListener('keyup', e => { keys[e.code] = false; });
 document.addEventListener('pointerlockchange', () => { locked = document.pointerLockElement === renderer.domElement; });
 renderer.domElement.addEventListener('mousedown', e => { if (!running || inVR) return; if (!locked) lockPointer(); if (e.button === 0) startSwing(); });
+addEventListener('mouseup', e => { if (e.button === 0) releaseClick(); });
 addEventListener('mousemove', e => { if (!locked || inVR) return; yaw -= e.movementX * 0.0022; pitch = clamp(pitch - e.movementY * 0.0022, -1.4, 1.4); });
 
-let swingT = 0, swingHit = false; const SWING = 0.36;
-// Flat screen: F puts the sword away (it slides down out of view) or draws it again; clicking while it is away draws it.
-let deskSheathed = false, deskSheath = 0;
-function toggleDesktopSword() { if (inVR || swingT > 0) return; deskSheathed = !deskSheathed; if (deskSheathed) sfx.block(); else sfx.swing(); }
-function startSwing() { if (deskSheathed) { toggleDesktopSword(); return; } if (swingT > 0 || deskSheath > 0.05) return; swingT = SWING; swingHit = false; sfx.swing(); }
-function updateDesktopSword(dt) {
+let swingT = 0, swingHit = false, swingDur = 0.36, bowCharge = -1, swapT = 0, swapped = false;
+// Flat screen: click attacks with the weapon in hand (hold and release to shoot the bow); F swaps it with the hip
+// (it slides out of view and back), G drops it, E picks up a weapon you stand next to.
+function startSwing() {
+  if (!deskW) { if (hipW) startSwap(); return; }
+  if (swapT > 0 || swingT > 0) return;
+  if (deskW.def.bow) { bowCharge = 0; return; }
+  swingDur = deskW.def.swing; swingT = swingDur; swingHit = false; sfx.swing();
+}
+function releaseClick() {
+  if (bowCharge >= 0 && deskW?.def.bow && !inVR) { const f = camera.getWorldDirection(_wa).clone(); fireArrow(camera.getWorldPosition(_wb).clone().addScaledVector(f, 0.5), f, 14 + 40 * Math.min(1, bowCharge)); }
+  bowCharge = -1; nockArrow.visible = false;
+}
+function startSwap() { if (inVR || swapT > 0 || swingT > 0 || (!deskW && !hipW)) return; swapT = 0.4; swapped = false; bowCharge = -1; }
+function updateDesktopWeapon(dt) {
   if (inVR) return;
-  if (swingT > 0) {
-    swingT -= dt; const p = 1 - Math.max(0, swingT) / SWING, s = Math.sin(p * Math.PI), e = p * p * (3 - 2 * p);
-    sword.position.set(lerp(0.3, -0.1, e), -0.24 + s * 0.08, -0.45 - s * 0.15);
-    sword.rotation.set(0.7 - s * 0.9, lerp(-0.9, 1.0, e), lerp(-0.9, 0.6, e));
-    if (!swingHit && p > 0.35) {
-      swingHit = true; const h = headPos(), f = forward2D();
-      const imp = new THREE.Vector3(f.x * 6 + f.z * 2.5, 1.5, f.z * 6 - f.x * 2.5); // forward + right-to-left sweep
-      const inArc = enemies.filter(en => { if (en.dead) return false; const dx = en.x - h.x, dz = en.z - h.z, d = Math.hypot(dx, dz); en._d = d; return d < 2.9 + en.rad && (dx * f.x + dz * f.z) / (d || 1) > 0.4; });
-      inArc.sort((a, b) => a._d - b._d).slice(0, 2).forEach(en => hitEnemy(en, 1, h.x, h.z, imp)); // a swing connects with the 2 nearest at most
-      for (const rd of [...ragdolls]) { const c = rd.P[0].p, dx = c.x - h.x, dz = c.z - h.z, d = Math.hypot(dx, dz); if (d < 3 && (dx * f.x + dz * f.z) / (d || 1) > 0.3) nudgeRagdoll(rd, imp, 0.8); }
-    }
-    if (swingT <= 0) restSword();
-  } else { // resting, or sliding into / out of the sheath
-    deskSheath = clamp(deskSheath + (deskSheathed ? dt : -dt) * 5, 0, 1); const e = deskSheath * deskSheath * (3 - 2 * deskSheath);
-    restSword(); sword.position.y -= e * 0.6; sword.position.x += e * 0.08; sword.rotation.x += e * 0.7; sword.visible = deskSheath < 0.98;
+  if (swapT > 0) {
+    swapT -= dt; const pr = 1 - Math.max(0, swapT) / 0.4; if (!swapped && pr >= 0.5) { swapped = true; deskSwap(); }
+    if (deskW) { deskRest(deskW); deskW.g.position.y -= Math.sin(pr * Math.PI) * 0.6; } return;
   }
+  if (!deskW) return;
+  const w = deskW, g = w.g, def = w.def;
+  if (def.bow) { // string pulls back while the button is held
+    deskRest(w); const c = bowCharge >= 0 ? Math.min(1, (bowCharge += dt / 0.8)) : 0;
+    const a = g.userData.string.geometry.attributes.position; a.setXYZ(0, 0, 0.12, 0.6); a.setXYZ(1, 0, 0.12 + c * 0.35, 0); a.setXYZ(2, 0, 0.12, -0.6); a.needsUpdate = true;
+    nockArrow.visible = bowCharge >= 0;
+    if (nockArrow.visible) { g.updateMatrixWorld(true); g.localToWorld(nockArrow.position.set(0, 0.12 + c * 0.35 - 0.36, 0)); nockArrow.quaternion.setFromUnitVectors(_wa.set(0, 0, -1), _wb.set(0, -1, 0).applyQuaternion(g.getWorldQuaternion(_wq))); }
+    return;
+  }
+  if (swingT > 0) {
+    swingT -= dt; const p = 1 - Math.max(0, swingT) / swingDur, s = Math.sin(p * Math.PI), e = p * p * (3 - 2 * p);
+    if (def.thrust) { g.position.set(0.22 - e * 0.12, -0.3 + s * 0.06, -0.25 - s * 0.55); g.rotation.set(0.25 - s * 0.1, 0.05, -0.1); }
+    else { g.position.set(lerp(0.3, -0.1, e), -0.24 + s * 0.08, -0.45 - s * 0.15); g.rotation.set(0.7 - s * 0.9, lerp(-0.9, 1.0, e), lerp(-0.9, 0.6, e)); }
+    if (!swingHit && p > 0.35) {
+      swingHit = true; const h = headPos(), f = forward2D(), cone = def.thrust ? 0.8 : 0.4;
+      const imp = new THREE.Vector3(f.x * 6 + f.z * 2.5, 1.5, f.z * 6 - f.x * 2.5); // forward + right-to-left sweep
+      const inArc = enemies.filter(en => { if (en.dead) return false; const dx = en.x - h.x, dz = en.z - h.z, d = Math.hypot(dx, dz); en._d = d; return d < def.reach + en.rad && (dx * f.x + dz * f.z) / (d || 1) > cone; });
+      inArc.sort((a, b) => a._d - b._d).slice(0, def.thrust ? 1 : 2).forEach(en => hitEnemy(en, 1, h.x, h.z, imp, def.dmg(), def.stun)); // a swing connects with the 2 nearest at most
+      for (const rd of [...ragdolls]) { const c = rd.P[0].p, dx = c.x - h.x, dz = c.z - h.z, d = Math.hypot(dx, dz); if (d < def.reach && (dx * f.x + dz * f.z) / (d || 1) > 0.3) nudgeRagdoll(rd, imp, 0.8); }
+    }
+    if (swingT <= 0) deskRest(w);
+  } else deskRest(w);
 }
-const prevTip = new THREE.Vector3(), _swTip = new THREE.Vector3(), _swHilt = new THREE.Vector3(), _swTipL = new THREE.Vector3(), _swVel = new THREE.Vector3(), _swImp = new THREE.Vector3(); let havePrev = false, tipSpeed = 0, whooshCd = 0;
-function updateVRSword(dt) {
-  if (!inVR || !hands.right || !swordInHand) { havePrev = false; return; }
-  sword.updateWorldMatrix(true, false);
-  const tipW = sword.localToWorld(_swTip.copy(TIP)), hiltW = sword.localToWorld(_swHilt.copy(HILT));
-  const tipL = dolly.worldToLocal(_swTipL.copy(tipW));
-  const velW = _swVel.set(0, 0, 0); if (havePrev) velW.subVectors(tipL, prevTip).divideScalar(Math.max(dt, 1e-3)).applyQuaternion(dolly.quaternion);
-  const sp = velW.length(); prevTip.copy(tipL); havePrev = true;
-  pushRagdollsWithBlade(hiltW, tipW, velW);
-  tipSpeed = lerp(tipSpeed, sp, 0.5); whooshCd -= dt;
-  if (tipSpeed > 4 && whooshCd <= 0) { sfx.swing(); whooshCd = 0.4; }
-  sword.userData.edge.material.color.setHex(tipSpeed > 1.8 ? 0xffd27a : 0xff7a1a);
-  if (tipSpeed < 1.8) return;
-  const h = headPos(), mult = clamp(tipSpeed / 4.5, 0.6, 1.6);
-  for (const e of enemies) { if (e.dead || e.hitCd > 0) continue; if (enemyBladeDist(e, hiltW, tipW) < e.rad + 0.1) hitEnemy(e, mult, h.x, h.z, _swImp.copy(velW).clampLength(0, 12)); }
-}
+const _swTip = new THREE.Vector3(), _swHilt = new THREE.Vector3(), _swTipL = new THREE.Vector3(), _swVel = new THREE.Vector3(), _swImp = new THREE.Vector3();
 let snapReady = true, runLatch = false;
 let airborne = false, jumpVy = 0; const JUMP_V = 5.2, JUMP_G = 12; // about 1.1 m high, 0.9 s in the air
 function jump() { if (airborne || !running) return; airborne = true; jumpVy = JUMP_V; tone(260, 0.1, 'triangle', 0.08, 140); }
@@ -1643,13 +1916,7 @@ if (resSel && hzSel) {
   resSel.onchange = store; hzSel.onchange = store;
 }
 
-// On a flat screen the right glove holds the sword. The sword sits on the VR grip rotated -0.35 rad about X,
-// so the hand goes on the sword with the inverse rotation, and its fingers are posed as a closed fist.
-function attachDesktopHand() {
-  const m = playerHands.right; sword.add(m.g); m.g.position.set(0, 0, 0); m.g.rotation.set(0.35, 0, 0); m.g.visible = true;
-  poseHand(m, [0.8, 0.9, 1, 1, 1], 1);
-}
-attachDesktopHand();
+initWeapons(); // weapons in hand, at the hip and around the world (from the save)
 placePlayer(S.x, S.z); camera.rotation.set(0, yaw, 0);
 // Compile every shader up front (renderer.compile skips hidden objects), so the first hit flash, message or
 // enemy doesn't stall a frame mid-fight while its program compiles.
@@ -1664,7 +1931,7 @@ const clock = new THREE.Clock(); let uiT = 0, saveT = 0;
 renderer.setAnimationLoop(() => {
   const rawDt = clock.getDelta(); const dt = Math.min(rawDt, 0.05); time += dt; if (rawDt > 0) fpsNow = lerp(fpsNow, 1 / rawDt, 0.05);
   if (running) {
-    updateMovement(dt); updateDesktopSword(dt); updateVRSword(dt); updateSpawns(dt); updateEnemies(dt); updateHands(dt); updateRagdolls(dt); updateStones(dt); updatePickups(dt); updateNPCs(dt); updateVillagers(dt);
+    updateMovement(dt); updateDesktopWeapon(dt); updateHeldWeapons(dt); updateWorldWeapons(dt); updateArrows(dt); updateSpawns(dt); updateEnemies(dt); updateHands(dt); updateRagdolls(dt); updateStones(dt); updatePickups(dt); updateNPCs(dt); updateVillagers(dt);
     if (interactQueued) { interactQueued = false; const it = interactableAt(headPos()); if (it) it.act(); }
     if (potionQueued) { potionQueued = false; drinkPotion(); }
     const h = headPos(); const it = interactableAt(h); setPrompt(it ? it.label : '');
@@ -1685,11 +1952,11 @@ renderer.setAnimationLoop(() => {
 });
 addEventListener('beforeunload', () => { if (running) save(); });
 if (['localhost', '127.0.0.1'].includes(location.hostname)) { // debug hooks for local testing only
-window.__emberwild = { setDay: v => { dayT = v; }, getDay: () => dayT, SITES, chests, crystals, pickups, villagers, HOUSES, groundAt, houseToWorld, interactableAt, renderer, S, enemies, ragdolls, hitEnemy, playerHands, poseHand, stones, camera, npcs, makeRagdoll, stepRagdoll, heightAt, headPos, dolly, spawnEnemy, startSwing, placePlayer, setYaw: v => { yaw = v; } }; // debug hook
+window.__emberwild = { weapons: WEAPONS, arrows, deskW: () => deskW, hipW: () => hipW, setDay: v => { dayT = v; }, getDay: () => dayT, SITES, chests, crystals, pickups, villagers, HOUSES, groundAt, houseToWorld, interactableAt, renderer, S, enemies, ragdolls, hitEnemy, playerHands, poseHand, stones, camera, npcs, makeRagdoll, stepRagdoll, heightAt, headPos, dolly, spawnEnemy, startSwing, placePlayer, setYaw: v => { yaw = v; } }; // debug hook
 // debug: fake VR controllers for testing grab logic on a desktop browser (no headset needed)
 window.__emberwild.simVR = () => {
   const mk = side => { const grip = new THREE.Group(); dolly.add(grip); const btn = () => ({ value: 0, pressed: false, touched: false }); const gamepad = { buttons: [btn(), btn(), btn(), btn(), btn(), btn(), btn()], axes: [0, 0, 0, 0], hapticActuators: [] }; hands[side] = { grip, src: { handedness: side, gamepad }, prev: [], isHand: false }; const ray = new THREE.Group(); grip.add(ray); rays[side] = ray; grip.add(playerHands[side].g); playerHands[side].g.rotation.set(0, 0, 0); return hands[side]; };
-  inVR = true; const L = mk('left'), R = mk('right'); holdSword(); L.grip.add(shield);
-  return { hands, grab, stones, scabbard, swordInHand: () => swordInHand, S, pickups, bodyPoint, rays, pulling, pullAim, recenter: () => recenterHeight(true), heightOffset: () => heightOffset };
+  inVR = true; const L = mk('left'), R = mk('right'); weaponsToVR(); L.grip.add(shield);
+  return { hands, grab, stones, scabbard, weapons: WEAPONS, hipW: () => hipW, deskW: () => deskW, holdInHand, toHip, bowDraw, handVel: s => handVel(s, new THREE.Vector3()), handHist, S, pickups, bodyPoint, rays, pulling, pullAim, recenter: () => recenterHeight(true), heightOffset: () => heightOffset };
 };
 }
