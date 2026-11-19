@@ -5,10 +5,13 @@
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Emberwild VR</title>
 <link rel="manifest" href="manifest.webmanifest">
+<link rel="preload" href="fonts/Arimo-latin.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="icon" href="icons/icon-192.png">
 <meta name="theme-color" content="#3a1d08">
 <style>
-  html,body{margin:0;height:100%;overflow:hidden;background:#0b1030;font-family:Arial,Helvetica,sans-serif;color:#f4ead2}
+  /* Arimo: metric-compatible with Arial (same widths), bundled so the Quest, which has no Arial, matches the PC. SIL OFL, see fonts/OFL.txt */
+  @font-face{font-family:Arimo;src:url(fonts/Arimo-latin.woff2) format('woff2');font-weight:400 700;font-display:block}
+  html,body{margin:0;height:100%;overflow:hidden;background:#0b1030;font-family:Arial,Arimo,sans-serif;color:#f4ead2}
   canvas{display:block}
   button,select,input{font-family:inherit}
   #intro{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:radial-gradient(ellipse at center,rgba(40,20,10,.75),rgba(5,5,15,.92));z-index:10}

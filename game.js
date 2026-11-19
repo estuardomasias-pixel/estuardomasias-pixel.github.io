@@ -1,5 +1,7 @@
 // EMBERWILD VR — an open-world WebXR RPG (runs in the Quest 3 browser or on a PC screen)
 import * as THREE from 'three';
+// Text is drawn into canvases at startup; wait (briefly) for the bundled Arimo font so labels don't render in a fallback.
+try { await Promise.race([Promise.all([document.fonts.load('16px Arimo'), document.fonts.load('bold 16px Arimo')]), new Promise(r => setTimeout(r, 1500))]); } catch (e) { }
 
 // ---------------------------------------------------------------- utilities
 const lerp = (a, b, t) => a + (b - a) * t;
@@ -203,7 +205,7 @@ function makePanel(w, h, cw, ch, ss = 2) { // drawn at ss x resolution so text s
 }
 function makeLabel(text, color = '#ffe6a8', scale = 1.6) {
   const c = document.createElement('canvas'); c.width = 1024; c.height = 256; const x = c.getContext('2d'); x.scale(2, 2);
-  x.font = 'bold 60px Arial,sans-serif'; x.textAlign = 'center'; x.textBaseline = 'middle';
+  x.font = 'bold 60px Arial,Arimo,sans-serif'; x.textAlign = 'center'; x.textBaseline = 'middle';
   x.lineWidth = 10; x.strokeStyle = 'rgba(0,0,0,.75)'; x.strokeText(text, 256, 64); x.fillStyle = color; x.fillText(text, 256, 64);
   const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = MAX_ANISO;
   const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: t, depthWrite: false, fog: false })); s.scale.set(scale, scale / 4, 1); return s;
@@ -837,7 +839,7 @@ function toast(msg, secs = 4) {
   const { ctx, canvas } = toastPanel; ctx.clearRect(0, 0, canvas.width, canvas.height);
   ctx.fillStyle = 'rgba(20,10,5,0.78)'; rr(ctx, 4, 4, canvas.width - 8, canvas.height - 8, 26); ctx.fill();
   ctx.strokeStyle = 'rgba(255,180,90,0.6)'; ctx.lineWidth = 4; ctx.stroke();
-  ctx.fillStyle = '#ffe9c4'; ctx.font = '38px Arial,sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.fillStyle = '#ffe9c4'; ctx.font = '38px Arial,Arimo,sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
   const lines = wrap(ctx, msg, canvas.width - 70).slice(0, 5); const lh = 46;
   lines.forEach((l, i) => ctx.fillText(l, canvas.width / 2, canvas.height / 2 + (i - (lines.length - 1) / 2) * lh));
   toastPanel.refresh(); toastPanel.mesh.visible = inVR; toastPanel.mat.opacity = 1;
@@ -847,7 +849,7 @@ function setPrompt(text) {
   if (text === promptText) return; promptText = text;
   $('prompt').style.display = text && !inVR ? 'block' : 'none'; $('prompt').textContent = text ? '[E] ' + text : '';
   const { ctx, canvas } = promptPanel; ctx.clearRect(0, 0, canvas.width, canvas.height);
-  if (text) { ctx.fillStyle = 'rgba(0,0,0,0.6)'; rr(ctx, 0, 0, canvas.width, canvas.height, 20); ctx.fill(); ctx.fillStyle = '#fff'; ctx.font = 'bold 40px Arial,sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText((hands.right?.isHand ? 'Pinch: ' : '(A) ') + text, canvas.width / 2, canvas.height / 2); }
+  if (text) { ctx.fillStyle = 'rgba(0,0,0,0.6)'; rr(ctx, 0, 0, canvas.width, canvas.height, 20); ctx.fill(); ctx.fillStyle = '#fff'; ctx.font = 'bold 40px Arial,Arimo,sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText((hands.right?.isHand ? 'Pinch: ' : '(A) ') + text, canvas.width / 2, canvas.height / 2); }
   promptPanel.refresh(); promptPanel.mesh.visible = !!text && inVR;
 }
 function questInfo() {
@@ -882,18 +884,18 @@ function drawWrist() {
   if (key === wristKey) return; wristKey = key;
   const { ctx, canvas } = wrist, W = canvas.width, H = canvas.height; ctx.clearRect(0, 0, W, H);
   ctx.fillStyle = 'rgba(14,10,24,0.88)'; rr(ctx, 0, 0, W, H, 30); ctx.fill(); ctx.strokeStyle = 'rgba(255,180,90,.6)'; ctx.lineWidth = 4; ctx.stroke();
-  ctx.fillStyle = '#ffcf8a'; ctx.font = 'bold 30px Arial,sans-serif'; ctx.textAlign = 'left'; ctx.textBaseline = 'top';
-  ctx.fillText(`Lv ${S.level}`, 22, 16); ctx.fillStyle = '#fff'; ctx.font = '26px Arial,sans-serif'; ctx.fillText(`Gold ${S.gold}   Potions ${S.potions}`, 140, 20);
+  ctx.fillStyle = '#ffcf8a'; ctx.font = 'bold 30px Arial,Arimo,sans-serif'; ctx.textAlign = 'left'; ctx.textBaseline = 'top';
+  ctx.fillText(`Lv ${S.level}`, 22, 16); ctx.fillStyle = '#fff'; ctx.font = '26px Arial,Arimo,sans-serif'; ctx.fillText(`Gold ${S.gold}   Potions ${S.potions}`, 140, 20);
   ctx.fillStyle = '#300'; rr(ctx, 22, 60, W - 44, 30, 15); ctx.fill(); ctx.fillStyle = '#e53935'; rr(ctx, 22, 60, (W - 44) * clamp(S.hp / maxHp(), 0, 1), 30, 15); ctx.fill();
-  ctx.fillStyle = '#fff'; ctx.font = 'bold 22px Arial,sans-serif'; ctx.textAlign = 'center'; ctx.fillText(`${Math.ceil(S.hp)} / ${maxHp()}`, W / 2, 63);
+  ctx.fillStyle = '#fff'; ctx.font = 'bold 22px Arial,Arimo,sans-serif'; ctx.textAlign = 'center'; ctx.fillText(`${Math.ceil(S.hp)} / ${maxHp()}`, W / 2, 63);
   ctx.fillStyle = '#332200'; rr(ctx, 22, 98, W - 44, 10, 5); ctx.fill(); ctx.fillStyle = '#ffd54f'; rr(ctx, 22, 98, (W - 44) * clamp(S.xp / xpNeed(), 0, 1), 10, 5); ctx.fill();
-  ctx.textAlign = 'left'; ctx.fillStyle = '#ffcf8a'; ctx.font = 'bold 26px Arial,sans-serif'; ctx.fillText(title, 22, 122);
-  ctx.fillStyle = '#eee'; ctx.font = '23px Arial,sans-serif'; wrap(ctx, desc, W - 44).slice(0, 3).forEach((l, i) => ctx.fillText(l, 22, 156 + i * 28));
+  ctx.textAlign = 'left'; ctx.fillStyle = '#ffcf8a'; ctx.font = 'bold 26px Arial,Arimo,sans-serif'; ctx.fillText(title, 22, 122);
+  ctx.fillStyle = '#eee'; ctx.font = '23px Arial,Arimo,sans-serif'; wrap(ctx, desc, W - 44).slice(0, 3).forEach((l, i) => ctx.fillText(l, 22, 156 + i * 28));
   if (od) {
     ctx.save(); ctx.translate(60, 300); ctx.rotate(od.ang); ctx.fillStyle = '#ffd54f'; ctx.beginPath(); ctx.moveTo(0, -30); ctx.lineTo(20, 22); ctx.lineTo(0, 10); ctx.lineTo(-20, 22); ctx.closePath(); ctx.fill(); ctx.restore();
-    ctx.fillStyle = '#fff'; ctx.font = '25px Arial,sans-serif'; ctx.fillText(`${od.name}  ${od.dist} m`, 100, 287);
+    ctx.fillStyle = '#fff'; ctx.font = '25px Arial,Arimo,sans-serif'; ctx.fillText(`${od.name}  ${od.dist} m`, 100, 287);
   }
-  ctx.textAlign = 'right'; ctx.fillStyle = '#9fdcaa'; ctx.font = '19px Arial,sans-serif'; ctx.fillText(`${Math.round(fpsNow / 5) * 5} fps`, W - 20, 332);
+  ctx.textAlign = 'right'; ctx.fillStyle = '#9fdcaa'; ctx.font = '19px Arial,Arimo,sans-serif'; ctx.fillText(`${Math.round(fpsNow / 5) * 5} fps`, W - 20, 332);
   wrist.refresh();
 }
 function updateHUD() {
@@ -1314,7 +1316,7 @@ async function enterVR() {
   } catch (e) { toast('Could not start VR: ' + e.message, 5); }
 }
 const vrBtn = document.createElement('button'); vrBtn.id = 'VRButton'; vrBtn.textContent = 'VR NOT SUPPORTED'; vrBtn.disabled = true;
-vrBtn.style.cssText = 'position:fixed;bottom:20px;left:50%;transform:translateX(-50%);z-index:20;padding:12px 22px;font:bold 15px Arial,sans-serif;border-radius:6px;border:1px solid #fff;background:rgba(0,0,0,.4);color:#fff;cursor:pointer';
+vrBtn.style.cssText = 'position:fixed;bottom:20px;left:50%;transform:translateX(-50%);z-index:20;padding:12px 22px;font:bold 15px Arial,Arimo,sans-serif;border-radius:6px;border:1px solid #fff;background:rgba(0,0,0,.4);color:#fff;cursor:pointer';
 document.body.appendChild(vrBtn);
 if (navigator.xr) navigator.xr.isSessionSupported('immersive-vr').then(ok => { if (ok) { vrBtn.disabled = false; vrBtn.textContent = 'ENTER VR'; } }).catch(() => { });
 vrBtn.onclick = () => { const s = renderer.xr.getSession(); if (s) s.end(); else enterVR(); };
