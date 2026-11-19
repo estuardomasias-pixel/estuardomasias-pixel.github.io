@@ -358,7 +358,7 @@ function house(x, z, rot, s = 1) {
   for (let t = -2.5; t <= 2.5; t += 0.4) ring(t, -1.9, 0.28);
   for (let t = -1.9; t <= 1.9; t += 0.4) { ring(-2.4, t, 0.28); ring(2.4, t, 0.28); }
   for (let t = 0.85; t <= 2.5; t += 0.4) { ring(-t, 1.9, 0.28); ring(t, 1.9, 0.28); }
-  ring(-1.8, -1.3, 0.5); ring(-1.8, -0.35, 0.5); ring(1.6, -1.5, 0.55); ring(1.4, 0.6, 0.5); ring(-1.9, 1.4, 0.35);
+  ring(-1.8, -1.3, 0.5); ring(-1.8, -0.35, 0.5); ring(1.6, -1.5, 0.55); ring(1.4, 0.6, 0.5); ring(-1.9, 1.4, 0.35); ring(1.4, 1.25, 0.2); ring(0.6, 0.6, 0.2);
 }
 for (let i = 0; i < 7; i++) {
   const a = i / 7 * Math.PI * 2 + 0.3; if (Math.abs(Math.sin(a - 0.0)) < 0.2 && Math.cos(a) > 0) continue;
@@ -573,6 +573,9 @@ function propMesh(kind) { // tools and carried things, held in the right hand (h
   g.visible = false; return g;
 }
 const villagers = [];
+// r: preferred clearance; core: the solid part plus half a body width, never walked through
+const OBSTACLES = [{ x: 0, z: 0, r: 2.2, core: 1.4 }, { x: PROPS.well.x, z: PROPS.well.z, r: 1.5, core: 1.25 }, { x: PROPS.woodpile.x, z: PROPS.woodpile.z, r: 1.2, core: 0.8 },
+  { x: PROPS.block.x, z: PROPS.block.z, r: 0.9, core: 0.6 }, { x: elder.x, z: elder.z, r: 0.8, core: 0.5 }, { x: smith.x, z: smith.z, r: 0.8, core: 0.5 }, { x: anvil.position.x, z: anvil.position.z, r: 0.7, core: 0.55 }];
 function makeVillager(def) {
   const n = makeNPC(def.name, def.look, def.home.x, def.home.z, 0, false);
   n.g.rotation.order = 'YXZ'; if (def.scale) n.g.scale.setScalar(def.scale);
@@ -587,12 +590,18 @@ function routeTo(n, t) { // waypoints from where the villager is to target t ({ 
   if (from && from !== t.house) pts.push(doorIn(from), doorOut(from));
   if (t.house && t.house !== from) pts.push(doorOut(t.house), doorIn(t.house));
   pts.push(t);
-  // walk around the campfire instead of through it
+  // walk around obstacles (campfire, well, woodpile, chopping block, the Elder, the smith and his anvil) instead of
+  // through them; an obstacle that contains the start or the goal of a leg (e.g. working at the well) is ignored
   const out = []; let px = n.x, pz = n.z;
   for (const q of pts) {
-    const dx = q.x - px, dz = q.z - pz, L = Math.hypot(dx, dz) || 1, u = clamp(-(px * dx + pz * dz) / (L * L), 0, 1);
-    const cx = px + dx * u, cz = pz + dz * u, cd = Math.hypot(cx, cz);
-    if (cd < 2.2 && u > 0 && u < 1) { const k = 2.8 / (cd || 1); out.push({ x: (cd ? cx : -dz / L) * k, z: (cd ? cz : dx / L) * k }); }
+    for (const o of OBSTACLES) {
+      // keep a wide berth normally; when working right next to it, still never cut through its solid core
+      const near = Math.hypot(px - o.x, pz - o.z) < o.r || Math.hypot(q.x - o.x, q.z - o.z) < o.r, R = near ? o.core : o.r;
+      if (Math.hypot(px - o.x, pz - o.z) < R || Math.hypot(q.x - o.x, q.z - o.z) < R) continue;
+      const dx = q.x - px, dz = q.z - pz, L2 = dx * dx + dz * dz || 1, u = clamp(((o.x - px) * dx + (o.z - pz) * dz) / L2, 0, 1);
+      const cx = px + dx * u - o.x, cz = pz + dz * u - o.z, cd = Math.hypot(cx, cz);
+      if (cd < R && u > 0 && u < 1) { const L = Math.sqrt(L2), ux = cd ? cx / cd : -dz / L, uz = cd ? cz / cd : dx / L, k = near ? R + 0.25 : R + 0.5; out.push({ x: o.x + ux * k, z: o.z + uz * k }); px = out[out.length - 1].x; pz = out[out.length - 1].z; }
+    }
     out.push(q); px = q.x; pz = q.z;
   }
   return out;
@@ -685,9 +694,9 @@ makeVillager({ name: 'Ines the Cook', home: H_WELL, look: { skin: npcMat(0xb98a6
   ], lines: ['Soup\'s on soon. The well water makes all the difference.', 'You look hungry, warden. Come by later.', 'Bram eats enough for three woodcutters.'] });
 makeVillager({ name: 'Young Pip', home: H_KID, scale: 0.68, speed: 1.7, look: { skin: npcMat(0xe0b48a), top: npcMat(0x3a6aa8), legs: npcMat(0x5a4a3a), boots: BOOTS, eye: NPC_EYE, chestW: 0.9 },
   day: [
-    { at: spot(2.6, -2.2), act: 'sweep', prop: 'broom', dur: 10, face: 0.6 },
+    { at: spot(5.6, -0.6), act: 'sweep', prop: 'broom', dur: 10, face: 0.6 },
     { at: spot(VW.x - 0.6, VW.z - 1.4), act: 'wave', dur: 3, face: Math.PI },
-    { at: spot(-3.3, 2.6), act: 'sweep', prop: 'broom', dur: 9, face: -2.2 },
+    { at: spot(-1.6, 5.2), act: 'sweep', prop: 'broom', dur: 9, face: -2.2 },
     { at: spot(1.4, 2.2), act: 'warm', dur: 5, face: faceTo(1.4, 2.2, 0, 0) },
   ], lines: ['When I grow up I\'ll fight the Hollow King too!', 'Elder Maren says I sweep the best in the whole village.', 'Have you seen the golden beams? I want to touch one!'] });
 // NPCs turn to face you up close, look at you with their heads, gesture while talking; the smith hammers at his anvil.
@@ -904,7 +913,7 @@ function updateStones(dt) {
     if (sp > 4 && s.hitCd <= 0) for (const e of enemies) {
       if (e.dead) continue; const by = e.g.position.y;
       if (Math.hypot(s.p.x - e.x, s.p.z - e.z) < e.rad + 0.08 && s.p.y > by && s.p.y < by + 1.85 * e.T.scale) {
-        const h = headPos(); hitEnemy(e, clamp(sp / 14, 0.25, 0.9), h.x, h.z, s.v.clone().multiplyScalar(0.6)); s.v.multiplyScalar(-0.25); s.hitCd = 0.3; break;
+        const h = headPos(); hitEnemy(e, clamp(sp / 12, 0.3, 1), h.x, h.z, s.v.clone().multiplyScalar(0.6), 8 + 2 * S.level); s.v.multiplyScalar(-0.25); s.hitCd = 0.3; break;
       }
     }
     if (sp > 3) for (const rd of ragdolls) for (const pt of rd.P) if (pt.p.distanceTo(s.p) < pt.r + 0.08) { nudgeRagdoll(rd, s.v, 0.3); s.v.multiplyScalar(0.5); break; }
@@ -1020,7 +1029,9 @@ function placePlayer(x, z) {
 }
 function movePlayer(dx, dz) {
   const h = headPos(); let nx = h.x + dx, nz = h.z + dz;
-  if (heightAt(nx, nz) < -1.4) return;
+  if (heightAt(nx, nz) < -0.6) { // too deep: try sliding along the shore on one axis
+    if (heightAt(nx, h.z) >= -0.6) nz = h.z; else if (heightAt(h.x, nz) >= -0.6) nx = h.x; else return;
+  }
   const r = Math.hypot(nx, nz); if (r > PLAY_RADIUS) { nx *= PLAY_RADIUS / r; nz *= PLAY_RADIUS / r; }
   [nx, nz] = collide(nx, nz, 0.35);
   dolly.position.x += nx - h.x; dolly.position.z += nz - h.z;
@@ -1029,7 +1040,19 @@ function movePlayer(dx, dz) {
 // ---------------------------------------------------------------- UI: toast, prompt, wrist, desktop HUD
 const $ = id => document.getElementById(id);
 let toastT = 0;
-function toast(msg, secs = 4) {
+// Messages queue up instead of overwriting each other; each stays up for a minimum time before the next replaces it.
+let toastQ = [], toastShownAt = -99, toastMin = 0, toastMsg = '';
+function toast(msg, secs = 4, now = false) { // now: a direct reply to the player's action shows at once
+  if (toastT > 0 && !now) {
+    if (msg === toastMsg || toastQ.some(q => q[0] === msg)) return;
+    const same = toastQ.findIndex(q => q[0].slice(0, 14) === msg.slice(0, 14)); // e.g. several level-ups: keep only the latest
+    if (same >= 0) toastQ[same] = [msg, secs]; else { if (toastQ.length >= 4) toastQ.shift(); toastQ.push([msg, secs]); }
+    const shown = time - toastShownAt; toastT = Math.min(toastT, Math.max(0, toastMin - shown) + 0.35); return;
+  }
+  showToast(msg, secs);
+}
+function showToast(msg, secs) {
+  toastMsg = msg; toastShownAt = time; toastMin = clamp(secs * 0.6, 2, 5);
   toastT = secs; $('toast').textContent = msg; $('toast').style.opacity = 1;
   const { ctx, canvas } = toastPanel; ctx.clearRect(0, 0, canvas.width, canvas.height);
   ctx.fillStyle = 'rgba(20,10,5,0.78)'; rr(ctx, 4, 4, canvas.width - 8, canvas.height - 8, 26); ctx.fill();
@@ -1057,7 +1080,7 @@ function questInfo() {
     case 4: return ['The Sun Crystals', 'Return to Elder Maren.'];
     case 5: return ['The Hollow King', 'Defeat the Hollow King at the Ashen Tower (purple beam, northeast).'];
     case 6: return ['The Hollow King', 'Return to Elder Maren.'];
-    default: return ['Free Roam', 'Emberwild is saved. Explore, find chests, hunt the remaining Gloom.'];
+    default: return ['Free Roam', S.chests.length >= chests.length ? 'Emberwild is saved and every treasure found. Hunt the remaining Gloom.' : `Emberwild is saved. Explore, find chests (${S.chests.length}/${chests.length}), hunt the remaining Gloom.`];
   }
 }
 function objective() {
@@ -1133,7 +1156,7 @@ const matEye = new THREE.MeshBasicMaterial({ color: 0xffd23a }), matEyeBoss = ne
 const ENEMY_LEGS = { gloom: new THREE.MeshLambertMaterial({ color: 0x241a28, flatShading: true }), thorn: new THREE.MeshLambertMaterial({ color: 0x3d3320, flatShading: true }), king: new THREE.MeshLambertMaterial({ color: 0x15101c, flatShading: true }) };
 const barGeo = new THREE.PlaneGeometry(1, 0.09); barGeo.translate(0.5, 0, 0);
 const barBg = new THREE.MeshBasicMaterial({ color: 0x220000, fog: false }), barFg = new THREE.MeshBasicMaterial({ color: 0xff4040, fog: false });
-const enemies = [];
+const enemies = []; const LOD_FAR = 30;
 function spawnEnemy(key, x, z) {
   const T = ENEMY_TYPES[key];
   const mat = new THREE.MeshLambertMaterial({ color: T.color, flatShading: true, emissive: 0x000000 });
@@ -1150,9 +1173,16 @@ function spawnEnemy(key, x, z) {
   }
   const bar = new THREE.Group(), bg = new THREE.Mesh(barGeo, barBg), fg = new THREE.Mesh(barGeo, barFg);
   bg.position.x = -0.5; fg.position.set(-0.5, 0, 0.002); bar.add(bg, fg); bar.position.y = 2.1; bar.visible = false; g.add(bar);
-  mergeRig(r, key); g.scale.setScalar(T.scale);
+  mergeRig(r, key);
+  // far-away version: the whole body in its rest pose baked into one mesh per material (about 3 draw calls instead
+  // of 12), shown beyond LOD_FAR where nobody can see the limbs move anyway
+  g.updateMatrixWorld(true); const lod = new THREE.Group(); lod.visible = false;
+  const byMat = new Map(); for (const pv of [r.upper, ...r.legs]) pv.traverse(o => { if (o.isMesh) { if (!byMat.has(o.material)) byMat.set(o.material, []); byMat.get(o.material).push({ geo: o.geometry, m: o.matrixWorld.clone() }); } });
+  let slot = 0; for (const [m, list] of byMat) { const k = 'lod:' + key + ':' + (slot++); if (!_mergeCache.has(k)) _mergeCache.set(k, mergeGeos(list)); lod.add(new THREE.Mesh(_mergeCache.get(k), m)); }
+  g.add(lod);
+  g.scale.setScalar(T.scale);
   const lv = 1 + 0.14 * (S.level - 1), nightMul = isNight() ? 1.2 : 1;
-  const e = { key, T, g, rig: r, upper: r.upper, mat, bar, fg, hp: T.hp * lv * nightMul, maxHp: T.hp * lv * nightMul, dmg: T.dmg * lv, x, z, vx: 0, vz: 0, atkCd: 1.2, hitCd: 0, flash: 0, lunge: 0, walk: Math.random() * 6, tilt: 0, tiltV: 0, wAng: Math.random() * 6.28, wT: 0, aggro: false, dead: false, rad: 0.4 * T.scale * T.chestW };
+  const e = { key, T, g, rig: r, lod, far: false, upper: r.upper, mat, bar, fg, hp: T.hp * lv * nightMul, maxHp: T.hp * lv * nightMul, dmg: T.dmg * lv, x, z, vx: 0, vz: 0, atkCd: 1.2, hitCd: 0, flash: 0, lunge: 0, walk: Math.random() * 6, tilt: 0, tiltV: 0, wAng: Math.random() * 6.28, wT: 0, aggro: false, dead: false, rad: 0.4 * T.scale * T.chestW };
   g.position.set(x, heightAt(x, z), z); scene.add(g); enemies.push(e); return e;
 }
 function enemyCenter(e, out) { return out.set(e.x, e.g.position.y + 1.1 * e.T.scale, e.z); }
@@ -1160,9 +1190,9 @@ function enemyCenter(e, out) { return out.set(e.x, e.g.position.y + 1.1 * e.T.sc
 function enemyBladeDist(e, a, b) { let m = 1e9; for (const f of [0.5, 1.05, 1.55]) m = Math.min(m, distPointSeg(_ebd.set(e.x, e.g.position.y + f * e.T.scale, e.z), a, b)); return m; }
 const _ebd = new THREE.Vector3();
 // impulse: world-space velocity (m/s) of the blow, used for knockback, flinch and the death ragdoll
-function hitEnemy(e, mult, fromX, fromZ, impulse) {
+function hitEnemy(e, mult, fromX, fromZ, impulse, base) { // base: damage before mult (defaults to the sword's)
   if (e.dead || e.hitCd > 0) return false;
-  let dmg = swordDamage() * mult; const crit = Math.random() < 0.12; if (crit) dmg *= 1.8;
+  let dmg = (base ?? swordDamage()) * mult; const crit = Math.random() < 0.12; if (crit) dmg *= 1.8;
   e.hp -= dmg; e.hitCd = 0.32; e.flash = 0.15; e.aggro = true;
   const dx = e.x - fromX, dz = e.z - fromZ, d = Math.hypot(dx, dz) || 1;
   const imp = impulse ? impulse.clone() : new THREE.Vector3(dx / d * 6 * mult, 1, dz / d * 6 * mult);
@@ -1219,7 +1249,7 @@ function makeRagdoll(e, imp) {
   }
   P[0].o.addScaledVector(imp, -RAG_STEP * 0.6 * k); P[1].o.addScaledVector(imp, -RAG_STEP * 0.3 * k); // the top gets extra so the body tumbles
   const limbs = [r.arms[0], r.arms[1], r.fore[0], r.fore[1], r.legs[0], r.legs[1], r.shins[0], r.shins[1]];
-  for (const m of [...r.fore, ...r.shins, ...r.arms, ...r.legs, r.upper]) { m.removeFromParent(); m.scale.setScalar(s); m.rotation.set(0, 0, 0); scene.add(m); }
+  for (const m of [...r.fore, ...r.shins, ...r.arms, ...r.legs, r.upper]) { m.removeFromParent(); m.scale.setScalar(s); m.rotation.set(0, 0, 0); m.visible = true; scene.add(m); }
   e.mat.emissive.setScalar(0);
   const rd = { P, C, soft, body: r.upper, limbs, limbIdx, mat: e.mat, life: 0, acc: 0, s, pushCd: 0 };
   ragdolls.push(rd);
@@ -1333,11 +1363,14 @@ function updateEnemies(dt) {
     }
     e.vx *= Math.exp(-dt * 6); e.vz *= Math.exp(-dt * 6);
     const nx = e.x + (mx + e.vx) * dt, nz = e.z + (mz + e.vz) * dt;
-    if (heightAt(nx, nz) > -1.4 && Math.hypot(nx, nz) > 30) { e.x = nx; e.z = nz; } else if (Math.hypot(nx, nz) <= 30) e.aggro = false;
+    if (heightAt(nx, nz) > -0.6 && Math.hypot(nx, nz) > 30) { e.x = nx; e.z = nz; } else if (Math.hypot(nx, nz) <= 30) e.aggro = false;
     e.g.position.set(e.x, heightAt(e.x, e.z), e.z);
     // walk cycle, attack swing, and a springy flinch when hit
     const moving = Math.hypot(mx, mz) / e.T.scale; e.walk += dt * (2 + moving * 3.5);
     e.lunge = Math.max(0, e.lunge - dt); const lf = Math.sin(e.lunge / 0.3 * Math.PI);
+    const far = dist > LOD_FAR && e.hp >= e.maxHp; // a hurt enemy keeps its full body (flinches, health bar)
+    if (far !== e.far) { e.far = far; e.lod.visible = far; e.rig.upper.visible = !far; for (const l of e.rig.legs) l.visible = !far; }
+    if (far) continue;
     animateHumanoid(e.rig, e.walk, Math.min(1, moving / 1.2), lf);
     e.tiltV += (-70 * e.tilt - 9 * e.tiltV) * dt; e.tilt += e.tiltV * dt;
     e.upper.rotation.x = e.rig.hunch + e.tilt + lf * 0.35;
@@ -1383,33 +1416,38 @@ const ELDER_LINES = {
   7: () => 'Elder Maren: "The nights are quieter now. A few gloomlings still stray - stay sharp, warden."',
 };
 function villagerTalk(n) {
-  if (n.act === 'sleep') { toast(`${n.name} is fast asleep.`, 2.5); return; }
-  n.talk = 4; toast(`${n.name}: "${n.lines[n.lineI++ % n.lines.length]}"`, 5);
+  if (n.act === 'sleep') { toast(`${n.name} is fast asleep.`, 2.5, true); return; }
+  n.talk = 4; toast(`${n.name}: "${n.lines[n.lineI++ % n.lines.length]}"`, 5, true);
 }
 let INTERACT = null; // built once; opened chests are skipped at lookup time
 function interactableAt(h) {
   if (!INTERACT) {
     INTERACT = [
-      { x: elder.x, z: elder.z, r: 3.2, label: 'Talk to Elder Maren', act: () => { elder.talk = 5; toast(ELDER_LINES[S.stage](), 9); save(); } },
+      { x: elder.x, z: elder.z, r: 3.2, label: 'Talk to Elder Maren', act: () => { elder.talk = 5; toast(ELDER_LINES[S.stage](), 9, true); save(); } },
       { x: smith.x, z: smith.z, r: 3.2, label: 'Talk to Smith Tovik', act: () => { smith.talk = 4; smithTalk(); } },
     ];
     for (const c of chests) INTERACT.push({ x: c.x, z: c.z, r: 2.4, chest: c, label: 'Open chest', act: () => openChest(c) });
   }
-  for (const n of villagers) if (Math.hypot(h.x - n.x, h.z - n.z) < 2.4) return n.talkItem || (n.talkItem = { label: 'Talk to ' + n.name, act: () => villagerTalk(n) });
-  for (const it of INTERACT) if (!(it.chest && it.chest.opened) && Math.hypot(h.x - it.x, h.z - it.z) < it.r) return it;
-  return null;
+  let best = null, bd = 1e9;
+  for (const it of INTERACT) { if (it.chest && it.chest.opened) continue; const d = Math.hypot(h.x - it.x, h.z - it.z); if (d < it.r && d < bd) { bd = d; best = it; } }
+  for (const n of villagers) { const d = Math.hypot(h.x - n.x, h.z - n.z) + 0.5; if (d - 0.5 < 2.4 && d < bd) { bd = d; best = n.talkItem || (n.talkItem = { act: () => villagerTalk(n) }); best.label = n.act === 'sleep' ? n.name + ' is asleep' : 'Talk to ' + n.name; } }
+  return best;
 }
+let smithOfferT = -99;
 function smithTalk() {
-  if (S.swordLv >= 5) { toast('Smith Tovik: "That blade is as fine as I can forge it. Go cut some Gloom!"', 4); return; }
+  if (S.swordLv >= 5) { toast('Smith Tovik: "That blade is as fine as I can forge it. Go cut some Gloom!"', 4, true); return; }
   const cost = 40 * (S.swordLv + 1);
-  if (S.gold >= cost) { S.gold -= cost; S.swordLv++; sfx.level(); burst(anvil.position.clone().add(_v2.set(0, 0.6, 0)), 0xff9a2a, 30, 3, 2); toast(`Smith Tovik: "There - sharper than ever!" Sword upgraded to +${S.swordLv} (${swordDamage()} damage).`, 5); save(); }
-  else toast(`Smith Tovik: "I can sharpen that blade to +${S.swordLv + 1} for ${cost} gold." (You have ${S.gold}.)`, 4.5);
+  if (S.gold >= cost && time - smithOfferT > 6) { smithOfferT = time; toast(`Smith Tovik: "I can sharpen that blade to +${S.swordLv + 1} for ${cost} gold." Talk to him again to pay. (You have ${S.gold}.)`, 5, true); return; }
+  if (S.gold >= cost) { smithOfferT = -99; S.gold -= cost; S.swordLv++; sfx.level(); burst(anvil.position.clone().add(_v2.set(0, 0.6, 0)), 0xff9a2a, 30, 3, 2); toast(`Smith Tovik: "There - sharper than ever!" Sword upgraded to +${S.swordLv} (${swordDamage()} damage).`, 5, true); save(); }
+  else toast(`Smith Tovik: "I can sharpen that blade to +${S.swordLv + 1} for ${cost} gold." (You have ${S.gold}.)`, 4.5, true);
 }
 function openChest(c) {
   c.opened = true; S.chests.push(c.idx); const g = 15 + Math.floor(Math.random() * 30); S.gold += g;
   const pot = Math.random() < 0.6; if (pot) S.potions++;
   sfx.coin(); sfx.pickup(); burst(c.g.position.clone().add(_v2.set(0, 0.8, 0)), 0xffd54f, 30, 2.5, 2.5);
-  toast(`Chest: ${g} gold${pot ? ' and a healing potion' : ''}!  (${S.chests.length}/${chests.length} chests found)`, 3.5); save();
+  toast(`Chest: ${g} gold${pot ? ' and a healing potion' : ''}!  (${S.chests.length}/${chests.length} chests found)`, 3.5, true);
+  if (S.chests.length === chests.length) { S.gold += 100; sfx.level(); toast(`Every treasure chest in Emberwild found! A bonus of 100 gold.`, 5); }
+  save();
 }
 
 // ---------------------------------------------------------------- input
@@ -1432,7 +1470,8 @@ function updateDesktopSword(dt) {
     if (!swingHit && p > 0.35) {
       swingHit = true; const h = headPos(), f = forward2D();
       const imp = new THREE.Vector3(f.x * 6 + f.z * 2.5, 1.5, f.z * 6 - f.x * 2.5); // forward + right-to-left sweep
-      for (const en of enemies) { if (en.dead) continue; const dx = en.x - h.x, dz = en.z - h.z, d = Math.hypot(dx, dz); if (d < 2.9 + en.rad && (dx * f.x + dz * f.z) / (d || 1) > 0.4) hitEnemy(en, 1, h.x, h.z, imp); }
+      const inArc = enemies.filter(en => { if (en.dead) return false; const dx = en.x - h.x, dz = en.z - h.z, d = Math.hypot(dx, dz); en._d = d; return d < 2.9 + en.rad && (dx * f.x + dz * f.z) / (d || 1) > 0.4; });
+      inArc.sort((a, b) => a._d - b._d).slice(0, 2).forEach(en => hitEnemy(en, 1, h.x, h.z, imp)); // a swing connects with the 2 nearest at most
       for (const rd of [...ragdolls]) { const c = rd.P[0].p, dx = c.x - h.x, dz = c.z - h.z, d = Math.hypot(dx, dz); if (d < 3 && (dx * f.x + dz * f.z) / (d || 1) > 0.3) nudgeRagdoll(rd, imp, 0.8); }
     }
     if (swingT <= 0) restSword();
@@ -1475,15 +1514,20 @@ function updateMovement(dt) {
   }
   const mag = Math.hypot(mx, mz);
   if (mag > 0.15) {
-    const f = forward2D(), speed = (run ? 7.5 : 4.2) * Math.min(1, mag) / mag;
+    const f = forward2D(), wade = heightAt(headPos().x, headPos().z) < 0 ? 0.55 : 1, speed = (run ? 7.5 : 4.2) * wade * Math.min(1, mag) / mag;
     const rx = -f.z, rz = f.x; // right vector
     movePlayer((f.x * -mz + rx * mx) * speed * dt, (f.z * -mz + rz * mx) * speed * dt);
   }
   const h = headPos(); const target = Math.max(groundAt(h.x, h.z), -1.3);
   if (airborne) { // ballistic jump, then land on whatever height the ground has where you come down
     jumpVy -= JUMP_G * dt; dolly.position.y += jumpVy * dt;
-    if (jumpVy < 0 && dolly.position.y <= target) { dolly.position.y = target; airborne = false; jumpVy = 0; tone(90, 0.12, 'triangle', 0.1); pulse('left', 0.3, 40); pulse('right', 0.3, 40); }
-  } else dolly.position.y = lerp(dolly.position.y, target, 1 - Math.exp(-dt * 12));
+    if (dolly.position.y < target) { // never below the ground: land when falling, ride the slope up while still rising
+      dolly.position.y = target;
+      if (jumpVy <= 0) { airborne = false; jumpVy = 0; tone(90, 0.12, 'triangle', 0.1); pulse('left', 0.3, 40); pulse('right', 0.3, 40); }
+    }
+  } else dolly.position.y = Math.max(lerp(dolly.position.y, target, 1 - Math.exp(-dt * 12)), target - 0.04); // smooth, but never more than 4 cm below the ground going uphill
+  const inside = houseAt(h.x, h.z); // the ceiling stops jumps (and tall players) indoors
+  if (inside) { const ceil = inside.h + 3.2 * inside.s - 0.15, eye = camera.position.y; if (dolly.position.y + eye > ceil) { dolly.position.y = Math.max(target, ceil - eye); if (jumpVy > 0) jumpVy = 0; } }
 }
 
 // ---------------------------------------------------------------- game flow
@@ -1516,7 +1560,7 @@ async function enterVR() {
   } catch (e) { toast('Could not start VR: ' + e.message, 5); }
 }
 const vrBtn = document.createElement('button'); vrBtn.id = 'VRButton'; vrBtn.textContent = 'VR NOT SUPPORTED'; vrBtn.disabled = true;
-vrBtn.style.cssText = 'position:fixed;bottom:20px;left:50%;transform:translateX(-50%);z-index:20;padding:12px 22px;font:bold 15px Arial,Arimo,sans-serif;border-radius:6px;border:1px solid #fff;background:rgba(0,0,0,.4);color:#fff;cursor:pointer';
+vrBtn.style.cssText = 'position:fixed;bottom:18px;right:18px;z-index:20;padding:12px 22px;font:bold 15px Arial,Arimo,sans-serif;border-radius:6px;border:1px solid #fff;background:rgba(0,0,0,.4);color:#fff;cursor:pointer';
 document.body.appendChild(vrBtn);
 if (navigator.xr) navigator.xr.isSessionSupported('immersive-vr').then(ok => { if (ok) { vrBtn.disabled = false; vrBtn.textContent = 'ENTER VR'; } }).catch(() => { });
 vrBtn.onclick = () => { const s = renderer.xr.getSession(); if (s) s.end(); else enterVR(); };
@@ -1556,7 +1600,8 @@ renderer.setAnimationLoop(() => {
     const h = headPos(); const it = interactableAt(h); setPrompt(it ? it.label : '');
     // campfire heal + slow regen
     if (Math.hypot(h.x, h.z) < 5) S.hp = Math.min(maxHp(), S.hp + 12 * dt); else if (time - lastHurt > 6) S.hp = Math.min(maxHp(), S.hp + 1 * dt);
-    toastT -= dt; if (toastT <= 0) { $('toast').style.opacity = 0; toastPanel.mat.opacity = Math.max(0, toastPanel.mat.opacity - dt * 3); if (toastPanel.mat.opacity <= 0) toastPanel.mesh.visible = false; }
+    toastT -= dt; if (toastT <= 0 && toastQ.length) { const [m, sc] = toastQ.shift(); showToast(m, sc); }
+    if (toastT <= 0) { toastMsg = ''; $('toast').style.opacity = 0; toastPanel.mat.opacity = Math.max(0, toastPanel.mat.opacity - dt * 3); if (toastPanel.mat.opacity <= 0) toastPanel.mesh.visible = false; }
     hurtFlash.material.opacity = Math.max(0, hurtFlash.material.opacity - dt * 1.5); if (hurtFlash.material.opacity <= 0) hurtFlash.visible = false;
     uiT -= dt; if (uiT <= 0) { uiT = 0.25; if (inVR) drawWrist(); else updateHUD(); }
     saveT += dt; if (saveT > 15) { saveT = 0; save(); }
@@ -1570,7 +1615,7 @@ renderer.setAnimationLoop(() => {
 });
 addEventListener('beforeunload', () => { if (running) save(); });
 if (['localhost', '127.0.0.1'].includes(location.hostname)) { // debug hooks for local testing only
-window.__emberwild = { setDay: v => { dayT = v; }, villagers, HOUSES, groundAt, houseToWorld, interactableAt, renderer, S, enemies, ragdolls, hitEnemy, playerHands, poseHand, stones, camera, npcs, makeRagdoll, stepRagdoll, heightAt, headPos, dolly, spawnEnemy, startSwing, placePlayer, setYaw: v => { yaw = v; } }; // debug hook
+window.__emberwild = { setDay: v => { dayT = v; }, getDay: () => dayT, SITES, chests, crystals, pickups, villagers, HOUSES, groundAt, houseToWorld, interactableAt, renderer, S, enemies, ragdolls, hitEnemy, playerHands, poseHand, stones, camera, npcs, makeRagdoll, stepRagdoll, heightAt, headPos, dolly, spawnEnemy, startSwing, placePlayer, setYaw: v => { yaw = v; } }; // debug hook
 // debug: fake VR controllers for testing grab logic on a desktop browser (no headset needed)
 window.__emberwild.simVR = () => {
   const mk = side => { const grip = new THREE.Group(); dolly.add(grip); const btn = () => ({ value: 0, pressed: false, touched: false }); const gamepad = { buttons: [btn(), btn(), btn(), btn(), btn(), btn(), btn()], axes: [0, 0, 0, 0], hapticActuators: [] }; hands[side] = { grip, src: { handedness: side, gamepad }, prev: [], isHand: false }; grip.add(playerHands[side].g); playerHands[side].g.rotation.set(0, 0, 0); return hands[side]; };
