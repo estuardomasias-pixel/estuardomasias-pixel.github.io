@@ -311,26 +311,80 @@ const M = {
   lamp: new THREE.MeshBasicMaterial({ color: 0xffd27a }),
 };
 const VH = SITES.village.h;
+// Static village and tower meshes go into STATIC and are merged per material by bakeStatic() (a handful of draw
+// calls for the whole village, interiors included).
+const STATIC = new THREE.Group();
+const FM = {
+  floor: new THREE.MeshLambertMaterial({ color: 0x8a6a45 }), ceil: new THREE.MeshLambertMaterial({ color: 0x5a3e26 }),
+  linen: new THREE.MeshLambertMaterial({ color: 0xe8e0d0 }), pot: new THREE.MeshLambertMaterial({ color: 0x2a2a2a }),
+  jar: new THREE.MeshLambertMaterial({ color: 0x9a6a4a }), soil: new THREE.MeshLambertMaterial({ color: 0x5a3e24, flatShading: true }),
+  leaf: new THREE.MeshLambertMaterial({ color: 0x4f8f3a, flatShading: true }), water: new THREE.MeshBasicMaterial({ color: 0x3a6f9f }),
+  blanket: [0x8a3030, 0x2f5a8a, 0x5a7a30].map(c => new THREE.MeshLambertMaterial({ color: c })),
+  rug: [0x7a2a2a, 0x2a4a6a].map(c => new THREE.MeshLambertMaterial({ color: c })),
+};
+// Houses: 5 x 4 m footprint (local units, scaled by s), door gap 1.4 m on the local +Z side, which faces the campfire.
+// Local -> world: x' = H.x + (lx cos r + lz sin r) s, z' = H.z + (-lx sin r + lz cos r) s.
+const HOUSES = [];
+const houseToWorld = (H, lx, lz, out = new THREE.Vector3()) => { const c = Math.cos(H.rot), sn = Math.sin(H.rot); return out.set(H.x + (lx * c + lz * sn) * H.s, H.h, H.z + (-lx * sn + lz * c) * H.s); };
+const houseToLocal = (H, x, z) => { const dx = (x - H.x) / H.s, dz = (z - H.z) / H.s, c = Math.cos(H.rot), sn = Math.sin(H.rot); return [dx * c - dz * sn, dx * sn + dz * c]; };
+const houseAt = (x, z) => HOUSES.find(H => { const [lx, lz] = houseToLocal(H, x, z); return Math.abs(lx) < 2.5 && Math.abs(lz) < 2; }) || null;
+// standing height: the house floor when inside one, the terrain everywhere else
+const groundAt = (x, z) => { const H = houseAt(x, z); return H ? Math.max(heightAt(x, z), H.h + 0.1 * H.s) : heightAt(x, z); };
 function house(x, z, rot, s = 1) {
-  const g = new THREE.Group();
-  const walls = new THREE.Mesh(new THREE.BoxGeometry(5, 3.2, 4), M.wall); walls.position.y = 1.6; g.add(walls);
+  const g = new THREE.Group(), i = HOUSES.length, H = { i, x, z, rot, s, h: heightAt(x, z) }; HOUSES.push(H);
+  const box = (w, h, d, mat, px, py, pz) => { const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat); m.position.set(px, py, pz); g.add(m); return m; };
+  const cyl = (r, h, mat, px, py, pz, seg = 8) => { const m = new THREE.Mesh(new THREE.CylinderGeometry(r, r, h, seg), mat); m.position.set(px, py, pz); g.add(m); return m; };
+  const T = 0.2, F = 2 - T / 2; // wall thickness, front wall z
+  box(5, 3.2, T, M.wall, 0, 1.6, -F); box(T, 3.2, 4, M.wall, -2.5 + T / 2, 1.6, 0); box(T, 3.2, 4, M.wall, 2.5 - T / 2, 1.6, 0);
+  box(1.8, 3.2, T, M.wall, -1.6, 1.6, F); box(1.8, 3.2, T, M.wall, 1.6, 1.6, F); box(1.4, 1.1, T, M.wall, 0, 2.65, F); // front, around the door
+  for (const sx of [-1.6, 1.6]) box(0.8, 0.8, T + 0.02, M.lamp, sx, 1.9, F);                 // glowing windows (seen from both sides)
+  for (const sx of [-0.74, 0.74]) box(0.1, 2.12, T + 0.04, M.dark, sx, 1.06, F);              // door frame
+  const leaf = new THREE.Group(); leaf.position.set(-0.7, 0, F - T / 2 - 0.05); leaf.rotation.y = Math.PI - 0.12; g.add(leaf); // open door, swung back against the inside wall
+  const lm = new THREE.Mesh(new THREE.BoxGeometry(1.3, 2, 0.06), M.dark); lm.position.set(0.65, 1, 0); leaf.add(lm);
   const roof = new THREE.Mesh(new THREE.ConeGeometry(4.1, 2.4, 4), M.roof); roof.position.y = 4.4; roof.rotation.y = Math.PI / 4; roof.scale.set(1, 1, 0.82); g.add(roof);
-  const door = new THREE.Mesh(new THREE.BoxGeometry(1.1, 2, 0.1), M.dark); door.position.set(0, 1, 2.02); g.add(door);
-  for (const sx of [-1.6, 1.6]) { const w = new THREE.Mesh(new THREE.BoxGeometry(0.8, 0.8, 0.1), M.lamp); w.position.set(sx, 1.9, 2.02); g.add(w); }
-  g.position.set(x, heightAt(x, z), z); g.rotation.y = rot; g.scale.setScalar(s); scene.add(g);
-  addCollider(x, z, 3.1 * s);
+  box(4.9, 0.12, 3.9, FM.ceil, 0, 3.26, 0); box(4.6, 0.1, 3.6, FM.floor, 0, 0.05, 0);       // ceiling and floor
+  // bed (back left), hearth with chimney and pot (back right), table and stools (front right), shelf, rug
+  box(1.0, 0.35, 2.0, M.wood, -1.8, 0.2, -0.8); box(0.95, 0.12, 1.45, FM.blanket[i % 3], -1.8, 0.43, -0.5); box(0.7, 0.12, 0.35, FM.linen, -1.8, 0.45, -1.52);
+  box(1.1, 0.9, 0.6, M.stone, 1.6, 0.45, -1.5); box(0.6, 0.3, 0.05, M.ember, 1.6, 0.35, -1.18); box(0.5, 2.3, 0.4, M.stone, 1.6, 2.05, -1.62);
+  cyl(0.2, 0.25, FM.pot, 1.6, 1.03, -1.45);
+  box(1.1, 0.07, 0.7, M.wood, 1.4, 0.75, 0.6); for (const lx of [0.92, 1.88]) for (const lz of [0.32, 0.88]) box(0.07, 0.72, 0.07, M.wood, lx, 0.36, lz);
+  cyl(0.18, 0.45, M.wood, 1.4, 0.225, 1.25); cyl(0.18, 0.45, M.wood, 0.6, 0.225, 0.6); box(0.06, 0.12, 0.06, M.lamp, 1.55, 0.85, 0.5);
+  box(1.2, 0.06, 0.3, M.wood, -0.1, 1.5, -1.73); for (const jx of [-0.5, -0.1, 0.3]) cyl(0.08, 0.2, FM.jar, jx, 1.63, -1.73, 6);
+  box(1.6, 0.02, 1.2, FM.rug[i % 2], -0.2, 0.11, 0.3);
+  if (i % 2) box(0.6, 0.6, 0.6, M.wood, -1.9, 0.3, 1.4); else cyl(0.3, 0.8, M.wood, -1.9, 0.4, 1.4);
+  g.position.set(x, H.h, z); g.rotation.y = rot; g.scale.setScalar(s); STATIC.add(g);
+  // colliders: a row of small circles along each wall (doorway left open), plus the bigger furniture
+  const ring = (lx, lz, r) => { const w = houseToWorld(H, lx, lz); addCollider(w.x, w.z, r * s); };
+  for (let t = -2.5; t <= 2.5; t += 0.4) ring(t, -1.9, 0.28);
+  for (let t = -1.9; t <= 1.9; t += 0.4) { ring(-2.4, t, 0.28); ring(2.4, t, 0.28); }
+  for (let t = 0.85; t <= 2.5; t += 0.4) { ring(-t, 1.9, 0.28); ring(t, 1.9, 0.28); }
+  ring(-1.8, -1.3, 0.5); ring(-1.8, -0.35, 0.5); ring(1.6, -1.5, 0.55); ring(1.4, 0.6, 0.5); ring(-1.9, 1.4, 0.35);
 }
 for (let i = 0; i < 7; i++) {
   const a = i / 7 * Math.PI * 2 + 0.3; if (Math.abs(Math.sin(a - 0.0)) < 0.2 && Math.cos(a) > 0) continue;
   const r = 15 + (i % 2) * 2.5; const x = Math.sin(a) * r, z = Math.cos(a) * r;
   house(x, z, Math.atan2(-x, -z), 0.9 + (i % 3) * 0.12);
 }
+// village props used by the villagers' chores: well, chopping block, woodpile, vegetable garden
+const PROPS = { well: { x: -2.5, z: 8 }, block: { x: -8.5, z: -6.5 }, woodpile: { x: -2.9, z: -2.4 }, garden: { x: 8, z: 6 } };
+{
+  const add = (geo, mat, x, y, z, ry = 0) => { const m = new THREE.Mesh(geo, mat); m.position.set(x, VH + y, z); m.rotation.y = ry; STATIC.add(m); return m; };
+  const W = PROPS.well; add(new THREE.CylinderGeometry(0.75, 0.8, 0.8, 12, 1, true), M.stone, W.x, 0.4, W.z); add(new THREE.CircleGeometry(0.72, 12).rotateX(-Math.PI / 2), FM.water, W.x, 0.55, W.z);
+  for (const sx of [-0.8, 0.8]) add(new THREE.BoxGeometry(0.1, 1.8, 0.1), M.wood, W.x + sx, 0.9, W.z);
+  add(new THREE.ConeGeometry(1.1, 0.7, 4).rotateY(Math.PI / 4), M.roof, W.x, 2.1, W.z); add(new THREE.CylinderGeometry(0.05, 0.05, 1.7, 6).rotateZ(Math.PI / 2), M.wood, W.x, 1.6, W.z);
+  addCollider(W.x, W.z, 0.95);
+  const B = PROPS.block; add(new THREE.CylinderGeometry(0.35, 0.4, 0.5, 9), M.wood, B.x, 0.25, B.z); addCollider(B.x, B.z, 0.45);
+  const P = PROPS.woodpile; for (let k = 0; k < 9; k++) add(new THREE.CylinderGeometry(0.11, 0.11, 0.9, 6).rotateZ(Math.PI / 2), M.wood, P.x, 0.11 + Math.floor(k / 4) * 0.2, P.z - 0.35 + (k % 4) * 0.23 + (Math.floor(k / 4) % 2) * 0.1);
+  addCollider(P.x, P.z, 0.6);
+  const G = PROPS.garden; add(new THREE.BoxGeometry(3, 0.12, 2), FM.soil, G.x, 0.06, G.z);
+  for (let a = 0; a < 3; a++) for (let b = 0; b < 5; b++) add(new THREE.ConeGeometry(0.12, 0.3, 5), FM.leaf, G.x - 1.1 + b * 0.55, 0.27, G.z - 0.6 + a * 0.6);
+}
 // campfire
 const fire = new THREE.Group();
-for (let i = 0; i < 4; i++) { const l = new THREE.Mesh(new THREE.CylinderGeometry(0.1, 0.1, 1.3, 5), M.wood); l.rotation.z = Math.PI / 2; l.rotation.y = i * Math.PI / 4; l.position.y = 0.1; fire.add(l); }
+for (let i = 0; i < 4; i++) { const l = new THREE.Mesh(new THREE.CylinderGeometry(0.1, 0.1, 1.3, 5), M.wood); l.rotation.z = Math.PI / 2; l.rotation.y = i * Math.PI / 4; l.position.set(0, VH + 0.1, 0); STATIC.add(l); }
 const flames = [];
 for (let i = 0; i < 3; i++) { const f = new THREE.Mesh(new THREE.ConeGeometry(0.3 - i * 0.07, 1 - i * 0.2, 6), i ? M.flame : M.ember); f.position.y = 0.5; fire.add(f); flames.push(f); }
-for (let i = 0; i < 8; i++) { const s = new THREE.Mesh(new THREE.DodecahedronGeometry(0.22, 0), M.stone); s.position.set(Math.cos(i / 8 * 6.28) * 0.85, 0.1, Math.sin(i / 8 * 6.28) * 0.85); fire.add(s); }
+for (let i = 0; i < 8; i++) { const s = new THREE.Mesh(new THREE.DodecahedronGeometry(0.22, 0), M.stone); s.position.set(Math.cos(i / 8 * 6.28) * 0.85, VH + 0.1, Math.sin(i / 8 * 6.28) * 0.85); STATIC.add(s); }
 fire.position.set(0, VH, 0); scene.add(fire); addCollider(0, 0, 1.1);
 // lantern posts along paths
 for (const [ax, az, bx, bz] of PATHS) {
@@ -339,7 +393,7 @@ for (const [ax, az, bx, bz] of PATHS) {
     const t = d / len, x = lerp(ax, bx, t) + (bz - az) / len * 2.6, z = lerp(az, bz, t) - (bx - ax) / len * 2.6, h = heightAt(x, z);
     const post = new THREE.Mesh(new THREE.CylinderGeometry(0.07, 0.09, 2.2, 5), M.wood); post.position.set(x, h + 1.1, z);
     const lamp = new THREE.Mesh(new THREE.BoxGeometry(0.28, 0.32, 0.28), M.lamp); lamp.position.set(x, h + 2.3, z);
-    scene.add(post, lamp);
+    STATIC.add(post, lamp);
   }
 }
 // ashen tower
@@ -351,9 +405,15 @@ for (const [ax, az, bx, bz] of PATHS) {
   }
   const door = new THREE.Mesh(new THREE.BoxGeometry(2, 3.2, 0.4), new THREE.MeshBasicMaterial({ color: 0x8a1aff })); door.position.set(0, 1.6, 4.2); g.add(door);
   for (let i = 0; i < 6; i++) { const a = i / 6 * 6.28; const pil = new THREE.Mesh(new THREE.BoxGeometry(1, 2 + (i % 3) * 1.6, 1), M.stone); pil.position.set(Math.cos(a) * 11, 1, Math.sin(a) * 11); pil.rotation.set(rand() * 0.2, a, rand() * 0.2); g.add(pil); addCollider(T.x + Math.cos(a) * 11, T.z + Math.sin(a) * 11, 0.8); }
-  g.position.set(T.x, T.h, T.z); g.rotation.y = Math.atan2(-T.x, -T.z); scene.add(g); addCollider(T.x, T.z, 4.6);
+  g.position.set(T.x, T.h, T.z); g.rotation.y = Math.atan2(-T.x, -T.z); STATIC.add(g); addCollider(T.x, T.z, 4.6);
   const lbl = makeLabel('The Ashen Tower', '#d9b3ff', 6); lbl.position.set(T.x, T.h + 31, T.z); scene.add(lbl);
 }
+// merge every static mesh above into one mesh per material (world space), then free the source geometries
+(function bakeStatic() {
+  STATIC.updateMatrixWorld(true); const byMat = new Map();
+  STATIC.traverse(o => { if (o.isMesh) { if (!byMat.has(o.material)) byMat.set(o.material, []); byMat.get(o.material).push({ geo: o.geometry, m: o.matrixWorld.clone() }); } });
+  for (const [mat, list] of byMat) { const mesh = new THREE.Mesh(mergeGeos(list), mat); mesh.matrixAutoUpdate = false; scene.add(mesh); for (const it of list) it.geo.dispose(); }
+})();
 
 // ---------------------------------------------------------------- beacons, crystals, chests, NPCs
 function beam(color) { const m = new THREE.Mesh(new THREE.CylinderGeometry(0.7, 0.7, 160, 8, 1, true), new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.32, fog: false, depthWrite: false, blending: THREE.AdditiveBlending, side: THREE.DoubleSide })); m.visible = false; scene.add(m); return m; }
@@ -465,12 +525,12 @@ function animateHumanoid(r, walk, amp, lf = 0) {
 }
 const wrapAng = a => Math.atan2(Math.sin(a), Math.cos(a));
 
-function makeNPC(name, look, x, z, faceAng) {
+function makeNPC(name, look, x, z, faceAng, collide = true) {
   const r = makeHumanoid(look), g = r.g;
   const label = makeLabel(name); label.position.y = 2.25; g.add(label);
   const mark = makeLabel('!', '#ffd84a', 2.4); mark.position.y = 2.75; mark.visible = false; g.add(mark);
-  g.position.set(x, heightAt(x, z), z); g.rotation.y = faceAng; scene.add(g); addCollider(x, z, 0.45);
-  return { name, g, r, head: r.head, mark, x, z, face: faceAng, yaw: faceAng, talk: 0, t: Math.random() * 6 };
+  g.position.set(x, heightAt(x, z), z); g.rotation.y = faceAng; scene.add(g); if (collide) addCollider(x, z, 0.45);
+  return { name, g, r, head: r.head, label, mark, x, z, face: faceAng, yaw: faceAng, talk: 0, t: Math.random() * 6 };
 }
 const npcMat = c => new THREE.MeshLambertMaterial({ color: c });
 const SKIN = npcMat(0xe0b48a), BOOTS = npcMat(0x3a2a1a), NPC_EYE = new THREE.MeshBasicMaterial({ color: 0x1a1410 });
@@ -495,6 +555,141 @@ const smith = makeNPC('Smith Tovik', { skin: SKIN, top: npcMat(0x7a3b1e), legs: 
   _hm(new THREE.BoxGeometry(0.08, 0.08, 0.16), M.stone, smith.hammer, 0, 0, 0.36).rotation.y = Math.PI / 2;
 }
 const npcs = [elder, smith];
+// ---------------------------------------------------------------- villagers with daily chores
+// Each villager loops through a list of tasks: walk to a spot (through house doors when going in or out, around the
+// campfire), then do a chore animation there for a while. At night everyone goes home and sleeps in their bed.
+const nearestHouse = (x, z) => HOUSES.reduce((b, H) => Math.hypot(H.x - x, H.z - z) < Math.hypot(b.x - x, b.z - z) ? H : b, HOUSES[0]);
+const inHouse = (H, lx, lz) => { const w = houseToWorld(H, lx, lz); return { x: w.x, z: w.z, house: H }; };
+const doorOut = H => inHouse(H, 0, 3.2), doorIn = H => inHouse(H, 0, 1.0);
+function propMesh(kind) { // tools and carried things, held in the right hand (hand space: -Y runs along the fingers, +Z forward)
+  const g = new THREE.Group(), pole = (len, mat = M.wood) => { const m = _hm(new THREE.CylinderGeometry(0.018, 0.018, len, 5), mat, g, 0, 0, len / 2 - 0.08); m.rotation.x = Math.PI / 2; return m; };
+  if (kind === 'axe') { pole(0.7); _hm(new THREE.BoxGeometry(0.03, 0.14, 0.12), M.stone, g, 0, 0.05, 0.56); }
+  if (kind === 'hoe') { pole(1.2); _hm(new THREE.BoxGeometry(0.16, 0.02, 0.1), M.stone, g, 0, -0.05, 1.08); }
+  if (kind === 'broom') { pole(1.1); _hm(new THREE.ConeGeometry(0.1, 0.3, 6), FM.jar, g, 0, 0, 1.08).rotation.x = -Math.PI / 2; }
+  if (kind === 'spoon') { pole(0.45); }
+  if (kind === 'bucket') { _hm(new THREE.CylinderGeometry(0.13, 0.1, 0.22, 8), M.wood, g, 0, -0.16, 0); }
+  if (kind === 'basket') { _hm(new THREE.CylinderGeometry(0.2, 0.15, 0.16, 8), FM.jar, g, 0, -0.06, 0.18); for (let k = 0; k < 4; k++) _hm(new THREE.SphereGeometry(0.05, 6, 4), FM.leaf, g, (k - 1.5) * 0.07, 0.04, 0.18); }
+  if (kind === 'log') { _hm(new THREE.CylinderGeometry(0.11, 0.11, 0.6, 6), M.wood, g, 0, -0.02, 0.15).rotation.z = Math.PI / 2; }
+  g.visible = false; return g;
+}
+const villagers = [];
+function makeVillager(def) {
+  const n = makeNPC(def.name, def.look, def.home.x, def.home.z, 0, false);
+  n.g.rotation.order = 'YXZ'; if (def.scale) n.g.scale.setScalar(def.scale);
+  Object.assign(n, { home: def.home, day: def.day, lines: def.lines, speed: def.speed || 1.2, task: -1, tasks: null, route: [], timer: 0, act: 'idle', prop: null, props: {}, lineI: 0, beat: 0 });
+  for (const k of ['axe', 'hoe', 'broom', 'spoon', 'bucket', 'basket', 'log']) { n.props[k] = propMesh(k); n.r.hands[1].add(n.props[k]); }
+  mergeRig(n.r, 'villager:' + def.name); // fewer draw calls; tool props stay separate (they are groups in the hand)
+  const start = doorIn(def.home); n.x = start.x; n.z = start.z;
+  villagers.push(n); return n;
+}
+function routeTo(n, t) { // waypoints from where the villager is to target t ({ x, z, house })
+  const from = houseAt(n.x, n.z), pts = [];
+  if (from && from !== t.house) pts.push(doorIn(from), doorOut(from));
+  if (t.house && t.house !== from) pts.push(doorOut(t.house), doorIn(t.house));
+  pts.push(t);
+  // walk around the campfire instead of through it
+  const out = []; let px = n.x, pz = n.z;
+  for (const q of pts) {
+    const dx = q.x - px, dz = q.z - pz, L = Math.hypot(dx, dz) || 1, u = clamp(-(px * dx + pz * dz) / (L * L), 0, 1);
+    const cx = px + dx * u, cz = pz + dz * u, cd = Math.hypot(cx, cz);
+    if (cd < 2.2 && u > 0 && u < 1) { const k = 2.8 / (cd || 1); out.push({ x: (cd ? cx : -dz / L) * k, z: (cd ? cz : dx / L) * k }); }
+    out.push(q); px = q.x; pz = q.z;
+  }
+  return out;
+}
+function nextTask(n) {
+  n.task = (n.task + 1) % n.tasks.length; const t = n.tasks[n.task];
+  n.route = routeTo(n, t.at); n.timer = t.dur; n.act = 'walk';
+  for (const k in n.props) n.props[k].visible = k === t.carry; // carried on the way there
+}
+function chorePose(n, act, t, dt) {
+  const r = n.r, sw = Math.sin(t * 3);
+  r.upper.rotation.set(r.hunch, 0, 0); n.g.rotation.x = 0;
+  for (const s of [0, 1]) { r.arms[s].rotation.z = (s ? 1 : -1) * 0.12; r.legs[s].rotation.x = 0; r.shins[s].rotation.x = 0.08; }
+  if (act === 'chop' || act === 'hoe') { // raise slowly, strike fast
+    const per = act === 'chop' ? 1.3 : 1.0, p = (t % per) / per, up = p < 0.72 ? smoothstep(0, 0.72, p) : 1 - (p - 0.72) / 0.28, big = act === 'chop' ? 2.3 : 1.4;
+    for (const s of [0, 1]) { r.arms[s].rotation.x = -0.4 - up * big; r.fore[s].rotation.x = -0.35; }
+    r.upper.rotation.x = r.hunch + 0.15 + (1 - up) * (act === 'hoe' ? 0.45 : 0.3);
+    if (n.beat > 0.9 && p < 0.1) { const h = headPos(), d = Math.hypot(h.x - n.x, h.z - n.z); if (d < 14) { const w = n.r.hands[1].getWorldPosition(_v2); burst(w, act === 'chop' ? 0xc9a36a : 0x6a4a2a, 6, 1.5, 0.8); tone(act === 'chop' ? 300 : 160, 0.06, 'triangle', 0.05 * (1 - d / 14)); } }
+    n.beat = p;
+  } else if (act === 'sweep') {
+    r.arms[0].rotation.x = -0.75; r.arms[1].rotation.x = -0.55; r.fore[0].rotation.x = r.fore[1].rotation.x = -0.3;
+    r.arms[0].rotation.z = -0.12 + sw * 0.35; r.arms[1].rotation.z = 0.12 + sw * 0.35; r.upper.rotation.y = sw * 0.25; r.upper.rotation.x = r.hunch + 0.2;
+  } else if (act === 'stir') {
+    r.arms[1].rotation.x = -1.0 + Math.sin(t * 4) * 0.15; r.arms[1].rotation.z = 0.12 + Math.cos(t * 4) * 0.2; r.fore[1].rotation.x = -0.8;
+    r.arms[0].rotation.x = -0.1; r.fore[0].rotation.x = -0.3; r.upper.rotation.x = r.hunch + 0.15;
+  } else if (act === 'pull') { // hauling the well bucket up hand over hand
+    r.arms[0].rotation.x = -1.3 + sw * 0.5; r.arms[1].rotation.x = -1.3 - sw * 0.5; r.fore[0].rotation.x = r.fore[1].rotation.x = -0.6;
+  } else if (act === 'tend') { // kneel and pick
+    r.upper.rotation.x = r.hunch + 0.85; for (const s of [0, 1]) { r.arms[s].rotation.x = -0.9 + Math.sin(t * 2.5 + s * 2) * 0.35; r.fore[s].rotation.x = -0.3; r.legs[s].rotation.x = -0.6; r.shins[s].rotation.x = 1.2; }
+  } else if (act === 'warm') { for (const s of [0, 1]) { r.arms[s].rotation.x = -1.05 + Math.sin(t * 1.3 + s) * 0.05; r.fore[s].rotation.x = -0.35; } }
+  else if (act === 'stack') { r.upper.rotation.x = r.hunch + 0.7; for (const s of [0, 1]) { r.arms[s].rotation.x = -1.1; r.fore[s].rotation.x = -0.6; } }
+  else if (act === 'wave') { r.arms[1].rotation.x = -2.9; r.arms[1].rotation.z = 0.3 + Math.sin(t * 9) * 0.35; r.fore[1].rotation.x = -0.3; r.arms[0].rotation.x = 0; }
+  else if (act === 'sit') { for (const s of [0, 1]) { r.legs[s].rotation.x = -1.5; r.shins[s].rotation.x = 1.5; r.arms[s].rotation.x = -0.75; r.fore[s].rotation.x = -0.5; } }
+  else if (act === 'sleep') { n.g.rotation.x = -Math.PI / 2; for (const s of [0, 1]) { r.arms[s].rotation.x = 0; r.fore[s].rotation.x = -0.1; } }
+  else { for (const s of [0, 1]) { r.arms[s].rotation.x = -0.05; r.fore[s].rotation.x = -0.2; } } // idle
+}
+function updateVillagers(dt) {
+  const night = isNight(), h = headPos();
+  for (const n of villagers) {
+    const wantNight = night;
+    if (n.tasks === null || n.isNight !== wantNight) { // switch between the day routine and going to bed
+      n.isNight = wantNight; n.task = -1;
+      const bed = inHouse(n.home, -1.8, 0.15);
+      n.tasks = wantNight ? [{ at: bed, act: 'sleep', dur: 1e9, face: 0, local: true }] : n.day; nextTask(n);
+    }
+    n.t += dt; n.talk = Math.max(0, n.talk - dt);
+    const t = n.tasks[n.task], dxp = h.x - n.x, dzp = h.z - n.z, dp = Math.hypot(dxp, dzp);
+    let yawTarget = n.yaw, moving = 0;
+    if (n.talk > 0 && n.act !== 'sleep') { yawTarget = Math.atan2(dxp, dzp); chorePose(n, 'idle', n.t, dt); if (n.r.arms[1]) { n.r.arms[1].rotation.x = -0.6 - Math.sin(n.t * 3.1) * 0.2; n.r.fore[1].rotation.x = -0.7; } }
+    else if (n.route.length) { // walking
+      const q = n.route[0], dx = q.x - n.x, dz = q.z - n.z, d = Math.hypot(dx, dz), step = n.speed * dt;
+      if (d <= step) { n.x = q.x; n.z = q.z; n.route.shift(); } else { n.x += dx / d * step; n.z += dz / d * step; yawTarget = Math.atan2(dx, dz); moving = 1; }
+      n.walk = (n.walk || 0) + dt * (2 + n.speed * 3.5); chorePose(n, 'idle', n.t, dt); animateHumanoid(n.r, n.walk, moving ? Math.min(1, n.speed / 1.4) : 0, 0);
+      if (t.carry) for (const s of [0, 1]) { n.r.arms[s].rotation.x = -0.9; n.r.fore[s].rotation.x = -0.9; }
+      if (!n.route.length) { n.act = t.act; for (const k in n.props) n.props[k].visible = k === t.prop; }
+    } else { // doing the chore
+      n.act = t.act; yawTarget = t.local ? t.at.house.rot + t.face : t.face; chorePose(n, n.act, n.t, dt);
+      n.timer -= dt; if (n.timer <= 0) nextTask(n);
+    }
+    n.yaw += wrapAng(yawTarget - n.yaw) * Math.min(1, dt * 5); n.g.rotation.y = n.yaw; n.label.visible = n.act !== 'sleep';
+    // head follows the player when close and awake
+    const look = dp < 4 && n.act !== 'sleep' ? THREE.MathUtils.clamp(wrapAng(Math.atan2(dxp, dzp) - n.yaw), -1.1, 1.1) : 0;
+    n.head.rotation.y = lerp(n.head.rotation.y, look, Math.min(1, dt * 4));
+    const sc = n.g.scale.x, lift = n.act === 'sit' ? -0.45 * sc : n.act === 'sleep' ? 0.5 * n.home.s : 0;
+    n.g.position.set(n.x, groundAt(n.x, n.z) + lift, n.z);
+  }
+}
+const H_GARDEN = nearestHouse(PROPS.garden.x, PROPS.garden.z), H_BLOCK = nearestHouse(PROPS.block.x, PROPS.block.z);
+const H_WELL = nearestHouse(PROPS.well.x, PROPS.well.z), H_KID = HOUSES.find(Hh => ![H_GARDEN, H_BLOCK, H_WELL].includes(Hh)) || HOUSES[0];
+const spot = (x, z) => ({ x, z }), faceTo = (fx, fz, tx, tz) => Math.atan2(tx - fx, tz - fz);
+const VG = PROPS.garden, VB = PROPS.block, VW = PROPS.well, VP = PROPS.woodpile;
+makeVillager({ name: 'Farmer Odile', home: H_GARDEN, look: { skin: npcMat(0xc99a72), top: npcMat(0x5a7a3a), legs: npcMat(0x4a3a2a), boots: BOOTS, eye: NPC_EYE, chestW: 0.9 },
+  day: [
+    { at: spot(VG.x - 0.5, VG.z + 1.4), act: 'hoe', prop: 'hoe', dur: 14, face: Math.PI },
+    { at: spot(VG.x + 0.6, VG.z + 1.3), act: 'tend', dur: 8, face: Math.PI },
+    { at: inHouse(H_GARDEN, 0.55, 0.6), act: 'sit', carry: 'basket', dur: 9, face: Math.PI / 2, local: true },
+  ], lines: ['The soil here is stubborn, but the turnips don\'t mind.', 'Keep the Gloom out of my garden, warden!', 'Fresh greens for Ines\'s soup - nothing better.'] });
+makeVillager({ name: 'Woodcutter Bram', home: H_BLOCK, look: { skin: npcMat(0xd8a47e), top: npcMat(0x8a2f2f), legs: npcMat(0x3b3026), boots: BOOTS, eye: NPC_EYE, chestW: 1.25 },
+  day: [
+    { at: spot(VB.x + 0.95, VB.z + 0.3), act: 'chop', prop: 'axe', dur: 14, face: faceTo(VB.x + 0.95, VB.z + 0.3, VB.x, VB.z) },
+    { at: spot(VP.x + 0.9, VP.z), act: 'stack', carry: 'log', dur: 3, face: -Math.PI / 2 },
+    { at: spot(-1.6, -1.2), act: 'warm', dur: 7, face: faceTo(-1.6, -1.2, 0, 0) },
+  ], lines: ['Firewood keeps the Gloom at bay. Can\'t have too much of it.', 'Mind the axe, friend.', 'That fire burns all night. Somebody has to feed it.'] });
+makeVillager({ name: 'Ines the Cook', home: H_WELL, look: { skin: npcMat(0xb98a64), top: npcMat(0x8a6a2a), legs: npcMat(0x6a3a4a), boots: BOOTS, eye: NPC_EYE, chestW: 0.95 },
+  day: [
+    { at: inHouse(H_WELL, 1.6, -0.75), act: 'stir', prop: 'spoon', dur: 14, face: Math.PI, local: true },
+    { at: spot(VW.x + 1.15, VW.z), act: 'pull', dur: 7, face: -Math.PI / 2 },
+    { at: inHouse(H_WELL, 1.6, -0.75), act: 'stir', carry: 'bucket', prop: 'spoon', dur: 10, face: Math.PI, local: true },
+    { at: inHouse(H_WELL, 0.55, 0.6), act: 'sit', dur: 7, face: Math.PI / 2, local: true },
+  ], lines: ['Soup\'s on soon. The well water makes all the difference.', 'You look hungry, warden. Come by later.', 'Bram eats enough for three woodcutters.'] });
+makeVillager({ name: 'Young Pip', home: H_KID, scale: 0.68, speed: 1.7, look: { skin: npcMat(0xe0b48a), top: npcMat(0x3a6aa8), legs: npcMat(0x5a4a3a), boots: BOOTS, eye: NPC_EYE, chestW: 0.9 },
+  day: [
+    { at: spot(2.6, -2.2), act: 'sweep', prop: 'broom', dur: 10, face: 0.6 },
+    { at: spot(VW.x - 0.6, VW.z - 1.4), act: 'wave', dur: 3, face: Math.PI },
+    { at: spot(-3.3, 2.6), act: 'sweep', prop: 'broom', dur: 9, face: -2.2 },
+    { at: spot(1.4, 2.2), act: 'warm', dur: 5, face: faceTo(1.4, 2.2, 0, 0) },
+  ], lines: ['When I grow up I\'ll fight the Hollow King too!', 'Elder Maren says I sweep the best in the whole village.', 'Have you seen the golden beams? I want to touch one!'] });
 // NPCs turn to face you up close, look at you with their heads, gesture while talking; the smith hammers at his anvil.
 function updateNPCs(dt) {
   const h = headPos();
@@ -1187,6 +1382,10 @@ const ELDER_LINES = {
   6: () => { S.stage = 7; S.gold += 300; gainXP(300); sfx.level(); return 'Elder Maren: "The Gloom lifts! Emberwild is free, warden. Take 300 gold - and know that this valley is yours to roam."'; },
   7: () => 'Elder Maren: "The nights are quieter now. A few gloomlings still stray - stay sharp, warden."',
 };
+function villagerTalk(n) {
+  if (n.act === 'sleep') { toast(`${n.name} is fast asleep.`, 2.5); return; }
+  n.talk = 4; toast(`${n.name}: "${n.lines[n.lineI++ % n.lines.length]}"`, 5);
+}
 let INTERACT = null; // built once; opened chests are skipped at lookup time
 function interactableAt(h) {
   if (!INTERACT) {
@@ -1196,6 +1395,7 @@ function interactableAt(h) {
     ];
     for (const c of chests) INTERACT.push({ x: c.x, z: c.z, r: 2.4, chest: c, label: 'Open chest', act: () => openChest(c) });
   }
+  for (const n of villagers) if (Math.hypot(h.x - n.x, h.z - n.z) < 2.4) return n.talkItem || (n.talkItem = { label: 'Talk to ' + n.name, act: () => villagerTalk(n) });
   for (const it of INTERACT) if (!(it.chest && it.chest.opened) && Math.hypot(h.x - it.x, h.z - it.z) < it.r) return it;
   return null;
 }
@@ -1279,7 +1479,7 @@ function updateMovement(dt) {
     const rx = -f.z, rz = f.x; // right vector
     movePlayer((f.x * -mz + rx * mx) * speed * dt, (f.z * -mz + rz * mx) * speed * dt);
   }
-  const h = headPos(); const target = Math.max(heightAt(h.x, h.z), -1.3);
+  const h = headPos(); const target = Math.max(groundAt(h.x, h.z), -1.3);
   if (airborne) { // ballistic jump, then land on whatever height the ground has where you come down
     jumpVy -= JUMP_G * dt; dolly.position.y += jumpVy * dt;
     if (jumpVy < 0 && dolly.position.y <= target) { dolly.position.y = target; airborne = false; jumpVy = 0; tone(90, 0.12, 'triangle', 0.1); pulse('left', 0.3, 40); pulse('right', 0.3, 40); }
@@ -1350,7 +1550,7 @@ const clock = new THREE.Clock(); let uiT = 0, saveT = 0;
 renderer.setAnimationLoop(() => {
   const rawDt = clock.getDelta(); const dt = Math.min(rawDt, 0.05); time += dt; if (rawDt > 0) fpsNow = lerp(fpsNow, 1 / rawDt, 0.05);
   if (running) {
-    updateMovement(dt); updateDesktopSword(dt); updateVRSword(dt); updateSpawns(dt); updateEnemies(dt); updateHands(dt); updateRagdolls(dt); updateStones(dt); updatePickups(dt); updateNPCs(dt);
+    updateMovement(dt); updateDesktopSword(dt); updateVRSword(dt); updateSpawns(dt); updateEnemies(dt); updateHands(dt); updateRagdolls(dt); updateStones(dt); updatePickups(dt); updateNPCs(dt); updateVillagers(dt);
     if (interactQueued) { interactQueued = false; const it = interactableAt(headPos()); if (it) it.act(); }
     if (potionQueued) { potionQueued = false; drinkPotion(); }
     const h = headPos(); const it = interactableAt(h); setPrompt(it ? it.label : '');
@@ -1370,7 +1570,7 @@ renderer.setAnimationLoop(() => {
 });
 addEventListener('beforeunload', () => { if (running) save(); });
 if (['localhost', '127.0.0.1'].includes(location.hostname)) { // debug hooks for local testing only
-window.__emberwild = { setDay: v => { dayT = v; }, renderer, S, enemies, ragdolls, hitEnemy, playerHands, poseHand, stones, camera, npcs, makeRagdoll, stepRagdoll, heightAt, headPos, dolly, spawnEnemy, startSwing, placePlayer, setYaw: v => { yaw = v; } }; // debug hook
+window.__emberwild = { setDay: v => { dayT = v; }, villagers, HOUSES, groundAt, houseToWorld, interactableAt, renderer, S, enemies, ragdolls, hitEnemy, playerHands, poseHand, stones, camera, npcs, makeRagdoll, stepRagdoll, heightAt, headPos, dolly, spawnEnemy, startSwing, placePlayer, setYaw: v => { yaw = v; } }; // debug hook
 // debug: fake VR controllers for testing grab logic on a desktop browser (no headset needed)
 window.__emberwild.simVR = () => {
   const mk = side => { const grip = new THREE.Group(); dolly.add(grip); const btn = () => ({ value: 0, pressed: false, touched: false }); const gamepad = { buttons: [btn(), btn(), btn(), btn(), btn(), btn(), btn()], axes: [0, 0, 0, 0], hapticActuators: [] }; hands[side] = { grip, src: { handedness: side, gamepad }, prev: [], isHand: false }; grip.add(playerHands[side].g); playerHands[side].g.rotation.set(0, 0, 0); return hands[side]; };
