@@ -399,14 +399,30 @@ function house(x, z, rot, s = 1) {
   const T = 0.2, F = 2 - T / 2; // wall thickness, front wall z
   box(5, 3.2, T, M.wall, 0, 1.6, -F); box(T, 3.2, 4, M.wall, -2.5 + T / 2, 1.6, 0); box(T, 3.2, 4, M.wall, 2.5 - T / 2, 1.6, 0);
   box(1.8, 3.2, T, M.wall, -1.6, 1.6, F); box(1.8, 3.2, T, M.wall, 1.6, 1.6, F); box(1.4, 1.1, T, M.wall, 0, 2.65, F); // front, around the door
-  for (const sx of [-1.6, 1.6]) box(0.8, 0.8, T + 0.07, M.lamp, sx, 1.9, F);                 // windows (glow at night, seen from both sides)
+  const windowAt = (px, pz, alongX) => { // pane (glows at night) with a timber frame and a stone sill
+    const W = (w, h, d, mat, x, y, z) => alongX ? box(w, h, d, mat, x, y, z) : box(d, h, w, mat, x, y, z);
+    const o = alongX ? 0 : 1, sgn = alongX ? Math.sign(pz) : Math.sign(px);
+    W(0.8, 0.8, T + 0.07, M.lamp, px, 1.9, pz);
+    for (const dy of [-0.44, 0.44]) W(0.96, 0.08, T + 0.1, M.dark, px, 1.9 + dy, pz);
+    for (const dd of [-0.44, 0.44]) alongX ? box(0.08, 0.96, T + 0.1, M.dark, px + dd, 1.9, pz) : box(T + 0.1, 0.96, 0.08, M.dark, px, 1.9, pz + dd);
+    W(0.06, 0.8, T + 0.09, M.dark, px, 1.9, pz); // mullion
+    alongX ? box(1.0, 0.06, 0.22, M.stone, px, 1.47, pz + sgn * 0.08) : box(0.22, 0.06, 1.0, M.stone, px + sgn * 0.08, 1.47, pz); // sill
+  };
+  for (const sx of [-1.6, 1.6]) windowAt(sx, F, true);
+  windowAt(-2.4, 0.4, false); windowAt(2.4, 0.4, false);
   box(4.58, 3.1, 0.02, FM.inwall, 0, 1.6, -1.79); box(0.02, 3.1, 3.56, FM.inwall, -2.29, 1.6, 0); box(0.02, 3.1, 3.56, FM.inwall, 2.29, 1.6, 0); // inner walls
   box(1.6, 3.1, 0.02, FM.inwall, -1.5, 1.6, 1.79); box(1.6, 3.1, 0.02, FM.inwall, 1.5, 1.6, 1.79); box(1.4, 1.0, 0.02, FM.inwall, 0, 2.65, 1.79);
   for (const sx of [-0.74, 0.74]) box(0.1, 2.12, T + 0.04, M.dark, sx, 1.06, F);              // door frame
-  const leaf = new THREE.Group(); leaf.position.set(-0.7, 0, F - T / 2 - 0.05); leaf.rotation.y = Math.PI - 0.12; g.add(leaf); // open door, swung back against the inside wall
-  const lm = new THREE.Mesh(new THREE.BoxGeometry(1.3, 2, 0.06), M.dark); lm.position.set(0.65, 1, 0); leaf.add(lm);
-  const roof = new THREE.Mesh(new THREE.ConeGeometry(4.1, 2.4, 4), M.roof); roof.position.y = 4.4; roof.rotation.y = Math.PI / 4; roof.scale.set(1, 1, 0.82); g.add(roof);
-  box(4.9, 0.12, 3.9, FM.ceil, 0, 3.26, 0); box(4.6, 0.1, 3.6, FM.floor, 0, 0.05, 0);       // ceiling and floor
+  box(1.7, 0.16, T + 0.08, M.dark, 0, 2.18, F);                                                  // lintel over the door
+  // gable roof: two slopes meeting at a ridge, triangular gable walls at the ends, eaves overhanging the walls
+  const RISE = 1.5, EAVE = 2.4, pitch = Math.atan2(RISE, 2.0), slab = Math.hypot(EAVE, EAVE * RISE / 2.0) + 0.05;
+  for (const sz of [-1, 1]) { const r = box(5.8, 0.12, slab, M.roof, 0, 3.2 + RISE - (EAVE / 2) * (RISE / 2.0) + 0.07, sz * EAVE / 2); r.rotation.x = sz * pitch; }
+  const gable = new THREE.Shape([new THREE.Vector2(-2, 0), new THREE.Vector2(2, 0), new THREE.Vector2(0, RISE)]);
+  for (const sx of [-1, 1]) { const gm = new THREE.Mesh(new THREE.ExtrudeGeometry(gable, { depth: T, bevelEnabled: false }), M.wall); gm.rotation.y = Math.PI / 2; gm.position.set(sx * 2.4 - T / 2, 3.2, 0); g.add(gm); }
+  box(5.9, 0.14, 0.14, M.dark, 0, 3.2 + RISE + 0.04, 0);                                        // ridge beam
+  for (const cx of [-2.5, 2.5]) for (const cz of [-2, 2]) box(0.18, 3.25, 0.18, M.dark, cx, 1.62, cz); // timber corner posts
+  for (const sz of [-1, 1]) box(5.3, 0.3, 0.26, M.stone, 0, 0.0, sz * 2.02); for (const sx of [-1, 1]) box(0.26, 0.3, 4.3, M.stone, sx * 2.52, 0.0, 0); // stone foundation
+  box(4.9, 0.1, 3.9, FM.ceil, 0, 3.12, 0); box(4.6, 0.1, 3.6, FM.floor, 0, 0.05, 0);       // ceiling (below the wall tops, so nothing shares its plane) and floor
   // bed (back left), hearth with chimney and pot (back right), table and stools (front right), shelf, rug
   box(1.0, 0.35, 2.0, M.wood, -1.8, 0.2, -0.8); box(0.95, 0.12, 1.45, FM.blanket[i % 3], -1.8, 0.43, -0.5); box(0.7, 0.12, 0.35, FM.linen, -1.8, 0.45, -1.52);
   box(1.1, 0.9, 0.6, M.stone, 1.6, 0.45, -1.5); box(0.6, 0.3, 0.05, M.ember, 1.6, 0.35, -1.18); box(0.5, 2.3, 0.4, M.stone, 1.6, 2.05, -1.62); box(0.5, 1.9, 0.4, M.stone, 1.6, 4.15, -1.62); // chimney continues out through the roof
@@ -429,6 +445,64 @@ for (let i = 0; i < 7; i++) {
   const r = 15 + (i % 2) * 2.5; const x = Math.sin(a) * r, z = Math.cos(a) * r;
   house(x, z, Math.atan2(-x, -z), 0.9 + (i % 3) * 0.12);
 }
+// ---------------------------------------------------------------- doors (hinged, with physics)
+// Each house has a real door hinged on the left of the doorway that swings inward up to ~100 degrees. It has
+// angular velocity and hinge friction, bounces off its stops, and can be pushed open by walking into it from
+// outside, opened or closed with E, swung by grabbing a handle in VR, and is opened and closed by villagers as they
+// pass. All doors are two instanced draw calls (leaf and handles).
+const DOOR_W = 1.38, DOOR_H = 2.05, DOOR_T = 0.06, DOOR_MAX = 1.75, DOOR_Z = 1.9; // DOOR_Z: the front wall plane (house local)
+const doors = [];
+const doorIM = (() => {
+  const T4 = (x, y, z) => new THREE.Matrix4().makeTranslation(x, y, z);
+  const leaf = mergeGeos([{ geo: new THREE.BoxGeometry(DOOR_W, DOOR_H, DOOR_T), m: T4(DOOR_W / 2, DOOR_H / 2, 0) },
+    ...[0.45, 1.6].flatMap(y => [-1, 1].map(sd => ({ geo: new THREE.BoxGeometry(DOOR_W * 0.9, 0.09, 0.025), m: T4(DOOR_W / 2, y, sd * 0.04) }))), // ledges (planks held by cross boards)
+    ...[0.35, 0.7, 1.05].map(x => ({ geo: new THREE.BoxGeometry(0.012, DOOR_H * 0.98, DOOR_T + 0.004), m: T4(x, DOOR_H / 2, 0) }))]); // plank seams
+  const im = new THREE.InstancedMesh(leaf, new THREE.MeshLambertMaterial({ color: 0x5a3a20 }), HOUSES.length); im.frustumCulled = false; scene.add(im); return im;
+})();
+const knobIM = (() => {
+  const g = mergeGeos([-1, 1].map(sd => ({ geo: new THREE.SphereGeometry(0.035, 8, 6), m: new THREE.Matrix4().makeTranslation(DOOR_W - 0.12, 1.0, sd * 0.06) })));
+  const im = new THREE.InstancedMesh(g, M.gold, HOUSES.length); im.frustumCulled = false; scene.add(im); return im;
+})();
+for (const H of HOUSES) doors.push({ H, ang: 0, vel: 0, target: null, auto: false, idle: 0, m: new THREE.Matrix4(), hm: new THREE.Matrix4().compose(new THREE.Vector3(H.x, H.h, H.z), new THREE.Quaternion().setFromAxisAngle(THREE.Object3D.DEFAULT_UP, H.rot), new THREE.Vector3(H.s, H.s, H.s)) });
+const _dm = new THREE.Matrix4(), _dr = new THREE.Matrix4();
+function doorMatrix(d) { return d.m.copy(d.hm).multiply(_dm.makeTranslation(-0.7, 0, DOOR_Z)).multiply(_dr.makeRotationY(d.ang)); }
+function doorKnob(d, side, out) { return out.set(DOOR_W - 0.12, 1.0, side * 0.06).applyMatrix4(d.m); }
+const doorLocal = (d, x, z) => houseToLocal(d.H, x, z); // [lx, lz] in house units
+function nearDoorway(d, x, z, rad) { const [lx, lz] = doorLocal(d, x, z); return Math.abs(lx) < rad && Math.abs(lz - DOOR_Z) < rad; }
+function updateDoors(dt) {
+  const h = headPos();
+  doors.forEach((d, i) => {
+    // villagers open the door they walk through and close it behind them
+    const vNear = villagers.some(n => n.route.length && nearDoorway(d, n.x, n.z, 1.6));
+    if (vNear) { if (d.ang < 1.3) d.target = 1.5; d.auto = true; d.idle = 0; }
+    else if (d.auto) { d.idle += dt; if (d.idle > 2.5 && !nearDoorway(d, h.x, h.z, 1.8)) { d.target = 0; d.auto = false; } }
+    if (d.target !== null) { d.vel += ((d.target - d.ang) * 28 - d.vel * 7) * dt; if (Math.abs(d.target - d.ang) < 0.02 && Math.abs(d.vel) < 0.15) d.target = null; } // someone swinging it by hand
+    if (!d.held) {
+      d.vel *= Math.exp(-2.2 * dt); d.ang += d.vel * dt; // hinge friction
+      if (d.ang < 0) { if (d.vel < -1.2) { const v = Math.min(1, -d.vel / 4); hiss(0.07, 0.25 * v, 260); tone(80, 0.12, 'triangle', 0.08 * v); } d.ang = 0; d.vel = -d.vel * 0.15; if (Math.abs(d.vel) < 0.3) d.vel = 0; } // slams against the frame
+      if (d.ang > DOOR_MAX) { d.ang = DOOR_MAX; if (d.vel > 1) hiss(0.05, 0.12, 300); d.vel = -d.vel * 0.3; } // hits its stop
+    }
+    doorIM.setMatrixAt(i, doorMatrix(d)); knobIM.setMatrixAt(i, d.m);
+  });
+  doorIM.instanceMatrix.needsUpdate = true; knobIM.instanceMatrix.needsUpdate = true;
+}
+// the player's body against door leaves: pushing from outside swings it open, otherwise it blocks
+function doorCollide(nx, nz) {
+  for (const d of doors) {
+    if (Math.abs(nx - d.H.x) > 6 || Math.abs(nz - d.H.z) > 6) continue;
+    const [lx, lz] = doorLocal(d, nx, nz), r = 0.35 / d.H.s, ca = Math.cos(d.ang), sa = Math.sin(d.ang);
+    const px = lx + 0.7, pz = lz - DOOR_Z, t = clamp(px * ca - pz * sa, 0, DOOR_W), cx = t * ca, cz = -t * sa; // closest point on the leaf
+    const ex = px - cx, ez = pz - cz, dist = Math.hypot(ex, ez); if (dist >= r || dist < 1e-6) continue;
+    const pen = r - dist, side = Math.sign(px * sa + pz * ca) || 1; // +1: outside face
+    const canSwing = side > 0 ? d.ang < DOOR_MAX : d.ang > 0;
+    if (canSwing && !d.held) { d.vel += side * pen * 55 / Math.max(0.4, t); d.target = null; d.auto = false; } // push on the leaf: more torque far from the hinge
+    const k = canSwing ? 0.6 : 1; // a free door gives way a little, a stopped one blocks completely
+    const mx = (ex / dist) * pen * k, mz = (ez / dist) * pen * k, c = Math.cos(d.H.rot), sn = Math.sin(d.H.rot);
+    nx += (mx * c + mz * sn) * d.H.s; nz += (-mx * sn + mz * c) * d.H.s; // back to world
+  }
+  return [nx, nz];
+}
+function doorAt(p, rad = 1.8) { return doors.find(d => { const w = houseToWorld(d.H, 0, DOOR_Z); return Math.hypot(p.x - w.x, p.z - w.z) < rad; }) || null; }
 // village props used by the villagers' chores: well, chopping block, woodpile, vegetable garden
 const PROPS = { well: { x: -2.5, z: 8 }, block: { x: -8.5, z: -6.5 }, woodpile: { x: -2.9, z: -2.4 }, garden: { x: 8, z: 6 } };
 {
@@ -948,7 +1022,7 @@ function makePlayerHand(side) {
 const SEG_UNIT = new THREE.BoxGeometry(1, 1, 0.9).translate(0, -0.5, 0), _hsm = new THREE.Matrix4(), _hss = new THREE.Matrix4();
 function drawHandFingers(model) { // copy each finger segment's world transform into the instanced mesh
   const on = model.g.visible && inScene(model.g); model.im.visible = on; if (!on) return;
-  model.g.updateMatrixWorld(true);
+  model.g.updateWorldMatrix(true, true); // parents first: the weapon (or grip) has moved this frame
   model.segs.forEach((sg, i) => { const { L, w } = sg.userData; model.im.setMatrixAt(i, _hsm.multiplyMatrices(sg.matrixWorld, _hss.makeScale(w, L, w))); });
   model.im.instanceMatrix.needsUpdate = true;
 }
@@ -1130,6 +1204,7 @@ function grabCandidate(side, p) {
   for (const c of chests) if (!c.opened) { const d = _v3.set(c.x, c.g.position.y + 0.55, c.z).distanceTo(p) - 0.35; if (d < 0.12) consider(d + 0.03, { kind: 'chest', c }); }
   if (S.potions > 0 && bodyPoint(0.36, 0.12, 0, _pocketPt).distanceTo(p) < 0.2) consider(0.15, { kind: 'pocket' });
   weaponGrabCandidates(side, p, consider);
+  for (const d of doors) { if (Math.abs(p.x - d.H.x) > 5 || Math.abs(p.z - d.H.z) > 5) continue; for (const sd of [-1, 1]) { const k = doorKnob(d, sd, _wb); const dd = k.distanceTo(p); if (dd < 0.14) consider(dd, { kind: 'door', d }); } }
   return best;
 }
 function tryGrab(side, p) {
@@ -1139,6 +1214,7 @@ function tryGrab(side, p) {
   else if (c.kind === 'rag') { if (grab[other]?.rd === c.rd && grab[other].i === c.i) releaseGrab(other, true); c.rd.pins = c.rd.pins || {}; c.rd.pins[side] = { i: c.i, t: c.rd.P[c.i].p.clone() }; grab[side] = { kind: 'rag', rd: c.rd, i: c.i }; }
   else if (c.kind === 'chest') { openChest(c.c); pulse(side, 0.6, 60); return true; }
   else if (c.kind === 'weapon') { holdInHand(c.w, side); return true; }
+  else if (c.kind === 'door') { grab[side] = { kind: 'door', d: c.d }; c.d.held = true; c.d.target = null; c.d.auto = false; }
   else if (c.kind === 'hip') { holdInHand(hipW, side); sfx.swing(); return true; }
   else if (c.kind === 'nock') { if (!arrowsAvailable()) return true; S.arrows--; grab[side] = { kind: 'arrow', w: c.w }; c.w.nockSide = side; tone(620, 0.05, 'triangle', 0.05); }
   else if (c.kind === 'quiver') { if (!arrowsAvailable()) return true; S.arrows--; grab[side] = { kind: 'arrowHand' }; tone(700, 0.05, 'triangle', 0.05); } // drew an arrow from the quiver
@@ -1160,6 +1236,7 @@ function releaseGrab(side, quiet) {
     const rd = gb.rd; if (rd.pins) delete rd.pins[side];
     if (!quiet && ragdolls.includes(rd)) { for (const pt of rd.P) pt.o.addScaledVector(v, -RAG_STEP * 0.35); rd.P[gb.i].o.copy(rd.P[gb.i].p).addScaledVector(v, -RAG_STEP); }
   }
+  else if (gb.kind === 'door') { gb.d.held = false; } // let go: it keeps swinging
   else if (gb.kind === 'arrowHand') { S.arrows++; handArrow.visible = false; }
   else if (gb.kind === 'arrow') { // let go of the string: shoot if drawn far enough
     const w = gb.w, d = bowDraw(w), hp = hands[side] ? hands[side].grip.getWorldPosition(new THREE.Vector3()) : null;
@@ -1216,6 +1293,11 @@ function updateHands(dt) {
     const gb = grab[side];
     if (gb?.kind === 'stone') { gb.s.p.copy(p); syncStone(gb.s); }
     else if (gb?.kind === 'rag') { if (!ragdolls.includes(gb.rd)) grab[side] = null; else { gb.rd.pins[side].t.copy(p); gb.rd.life = Math.min(gb.rd.life, 1); } }
+    else if (gb?.kind === 'door') { // the door follows the hand around its hinge
+      const d = gb.d, [lx, lz] = doorLocal(d, p.x, p.z), a = clamp(Math.atan2(-(lz - DOOR_Z), lx + 0.7), 0, DOOR_MAX);
+      d.vel = lerp(d.vel, (a - d.ang) / Math.max(dt, 1e-3), 0.5); d.ang = a;
+      if (Math.hypot(p.x - doorKnob(d, 1, _wb).x, p.z - _wb.z) > 0.6 && Math.hypot(p.x - doorKnob(d, -1, _wb).x, p.z - _wb.z) > 0.6) releaseGrab(side, false); // pulled too far: the hand slips off
+    }
     else if (gb?.kind === 'arrowHand') { // an arrow from the quiver: show it in the hand; touch it to the bow string to nock it
       handArrow.visible = true; handArrow.quaternion.copy(h.grip.getWorldQuaternion(_q1)); handArrow.position.copy(p).addScaledVector(_wb.set(0, 0, -1).applyQuaternion(_q1), 0.28); // held near the nock end, along the fist
       const ob = grab[side === 'left' ? 'right' : 'left']?.w;
@@ -1589,6 +1671,7 @@ function movePlayer(dx, dz) {
   }
   const r = Math.hypot(nx, nz); if (r > PLAY_RADIUS) { nx *= PLAY_RADIUS / r; nz *= PLAY_RADIUS / r; }
   [nx, nz] = collide(nx, nz, 0.35);
+  [nx, nz] = doorCollide(nx, nz);
   for (const n of villagers) { const ox = nx - n.x, oz = nz - n.z, m = 0.3 * n.g.scale.x + 0.35, d2 = ox * ox + oz * oz; if (d2 < m * m && d2 > 1e-6) { const d = Math.sqrt(d2); nx = n.x + ox / d * m; nz = n.z + oz / d * m; } }
   dolly.position.x += nx - h.x; dolly.position.z += nz - h.z;
 }
@@ -2112,6 +2195,7 @@ function interactableAt(h) {
     for (const c of chests) INTERACT.push({ x: c.x, z: c.z, r: 2.4, chest: c, label: 'Open chest', act: () => openChest(c) });
   }
   let best = null, bd = 1e9;
+  { const d = doorAt(h, 1.9); if (d) { const w = houseToWorld(d.H, 0, DOOR_Z); bd = Math.hypot(h.x - w.x, h.z - w.z) + 0.6; best = d.item || (d.item = { act: () => { d.target = d.ang > 0.4 ? 0 : 1.5; d.auto = false; } }); best.label = d.ang > 0.4 ? 'Close the door' : 'Open the door'; } }
   for (const id in WEAPONS) { const w = WEAPONS[id]; if (w.state !== 'world' || w.flying) continue; const d = Math.hypot(h.x - w.p.x, h.z - w.p.z); if (d < 2.2 && d < bd) { bd = d; best = w.pickItem || (w.pickItem = { label: 'Pick up the ' + w.def.name, act: () => pickUpWeapon(w) }); } }
   for (const it of INTERACT) { if (it.chest && it.chest.opened) continue; const d = Math.hypot(h.x - it.x, h.z - it.z); if (d < it.r && d < bd) { bd = d; best = it; } }
   for (const n of villagers) { const d = Math.hypot(h.x - n.x, h.z - n.z) + 0.5; if (d - 0.5 < 2.4 && d < bd) { bd = d; best = n.talkItem || (n.talkItem = { act: () => villagerTalk(n) }); best.label = n.act === 'sleep' ? n.name + ' is asleep' : 'Talk to ' + n.name; } }
@@ -2138,10 +2222,10 @@ function openChest(c) {
 // ---------------------------------------------------------------- input
 function lockPointer() { try { const p = renderer.domElement.requestPointerLock(); if (p && p.catch) p.catch(() => {}); } catch (e) { } }
 const keys = {}; let interactQueued = false, potionQueued = false, locked = false, running = false;
-addEventListener('keydown', e => { keys[e.code] = true; if (!running) return; if (e.code === 'KeyE') interactQueued = true; if (e.code === 'KeyQ') potionQueued = true; if (e.code === 'Space') { e.preventDefault(); jump(); } if (e.code === 'KeyF') startSwap(); if (e.code === 'KeyG') deskDrop(); });
+addEventListener('keydown', e => { keys[e.code] = true; if (!running || paused) return; if (e.code === 'KeyE') interactQueued = true; if (e.code === 'KeyQ') potionQueued = true; if (e.code === 'Space') { e.preventDefault(); jump(); } if (e.code === 'KeyF') startSwap(); if (e.code === 'KeyG') deskDrop(); });
 addEventListener('keyup', e => { keys[e.code] = false; });
-document.addEventListener('pointerlockchange', () => { locked = document.pointerLockElement === renderer.domElement; });
-renderer.domElement.addEventListener('mousedown', e => { if (!running || inVR) return; if (!locked) lockPointer(); if (e.button === 0) startSwing(); });
+document.addEventListener('pointerlockchange', () => { locked = document.pointerLockElement === renderer.domElement; if (!locked && running && !inVR && !paused) setPaused(true); });
+renderer.domElement.addEventListener('mousedown', e => { if (!running || inVR || paused) return; if (!locked) lockPointer(); if (e.button === 0) startSwing(); });
 addEventListener('mouseup', e => { if (e.button === 0) releaseClick(); });
 addEventListener('mousemove', e => { if (!locked || inVR) return; yaw -= e.movementX * 0.0022; pitch = clamp(pitch - e.movementY * 0.0022, -1.4, 1.4); });
 
@@ -2289,8 +2373,9 @@ placePlayer(S.x, S.z); camera.rotation.set(0, yaw, 0);
 const clock = new THREE.Clock(); let uiT = 0, saveT = 0;
 renderer.setAnimationLoop(() => {
   const rawDt = clock.getDelta(); const dt = Math.min(rawDt, 0.05); time += dt; if (rawDt > 0) fpsNow = lerp(fpsNow, 1 / rawDt, 0.05);
-  if (running) {
-    updateMovement(dt); updateDesktopWeapon(dt); updateHeldWeapons(dt); updateWorldWeapons(dt); updateArrows(dt); updateSpawns(dt); updateEnemies(dt); updateHands(dt); updateRagdolls(dt); syncArrows(); updateStones(dt); updatePickups(dt); updateNPCs(dt); updateVillagers(dt); updateShadows(); updateAmbience(dt);
+  pollPause();
+  if (running && !paused) {
+    updateMovement(dt); updateDesktopWeapon(dt); updateHeldWeapons(dt); updateWorldWeapons(dt); updateArrows(dt); updateSpawns(dt); updateEnemies(dt); updateHands(dt); updateRagdolls(dt); syncArrows(); updateStones(dt); updatePickups(dt); updateNPCs(dt); updateVillagers(dt); updateDoors(dt); updateShadows(); updateAmbience(dt);
     if (interactQueued) { interactQueued = false; const it = interactableAt(headPos()); if (it) it.act(); }
     if (potionQueued) { potionQueued = false; drinkPotion(); }
     const h = headPos(); const it = interactableAt(h); setPrompt(it ? it.label : '');
@@ -2301,19 +2386,52 @@ renderer.setAnimationLoop(() => {
     hurtFlash.material.opacity = Math.max(0, hurtFlash.material.opacity - dt * 1.5); if (hurtFlash.material.opacity <= 0) hurtFlash.visible = false;
     uiT -= dt; if (uiT <= 0) { uiT = 0.25; if (inVR) drawWrist(); else updateHUD(); }
     saveT += dt; if (saveT > 15) { saveT = 0; save(); }
-  } else {
+  } else if (!running) {
     yaw += dt * 0.05; camera.rotation.set(-0.05, yaw, 0);
   }
   updateFireGlow(dt);
   for (let i = 0; i < flames.length; i++) { const f = flames[i]; f.scale.set(1 + Math.sin(time * 13 + i) * 0.12, 1 + Math.sin(time * 17 + i * 2) * 0.2, 1 + Math.cos(time * 11 + i) * 0.12); }
   if (Math.random() < dt * 8) burst(_v3.set((Math.random() - 0.5) * 0.4, VH + 0.9, (Math.random() - 0.5) * 0.4), 0xff8a2a, 1, 0.4, 1.4);
-  updateSky(dt); updateParticles(dt);
+  if (!paused) { updateSky(dt); updateParticles(dt); }
   drawHandFingers(playerHands.left); drawHandFingers(playerHands.right);
   renderer.render(scene, camera);
 });
 addEventListener('beforeunload', () => { if (running) save(); });
+// ---------------------------------------------------------------- pause and save
+// P or Esc (losing the mouse) pauses on a PC; the left controller's menu button pauses in VR, and taking the
+// headset off or opening the Quest menu pauses automatically. Pausing always saves.
+let paused = false, pauseBtnWas = false, resumeWas = false;
+const pausePanel = makePanel(0.8, 0.36, 800, 360, 1.25); pausePanel.mesh.position.set(0, 0, -1.1); pausePanel.mesh.visible = false; camera.add(pausePanel.mesh);
+function stamp() { const d = new Date(); return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }); }
+function drawPausePanel() {
+  const { ctx, canvas } = pausePanel; ctx.clearRect(0, 0, canvas.width, canvas.height);
+  ctx.fillStyle = 'rgba(20,10,5,0.88)'; rr(ctx, 4, 4, canvas.width - 8, canvas.height - 8, 26); ctx.fill(); ctx.strokeStyle = 'rgba(255,180,90,0.7)'; ctx.lineWidth = 4; ctx.stroke();
+  ctx.textAlign = 'center'; ctx.fillStyle = '#ffb347'; ctx.font = 'bold 64px Arial,Arimo,sans-serif'; ctx.fillText('PAUSED', canvas.width / 2, 110);
+  ctx.fillStyle = '#ffe9c4'; ctx.font = '34px Arial,Arimo,sans-serif'; ctx.fillText(`Progress saved at ${stamp()}`, canvas.width / 2, 190);
+  ctx.font = '30px Arial,Arimo,sans-serif'; ctx.fillText('A: resume     B: save again', canvas.width / 2, 270); pausePanel.refresh();
+}
+function setPaused(on) {
+  if (!running || on === paused) return;
+  paused = on;
+  if (on) { save(); $('pauseSaved').textContent = `Progress saved at ${stamp()}`; bowCharge = -1; for (const k in keys) keys[k] = false; }
+  $('pause').style.display = on && !inVR ? 'flex' : 'none';
+  pausePanel.mesh.visible = on && inVR; if (on && inVR) drawPausePanel();
+  if (!on && !inVR) lockPointer();
+  if (!on && hands.right) hands.right.prev[4] = hands.right.prev[5] = true; // the A that resumed must not also jump or talk
+}
+function pollPause() { // VR: the left menu button toggles; A resumes; B saves again
+  if (!inVR || !running) return;
+  const L = hands.left?.src.gamepad, R = hands.right?.src.gamepad;
+  const menu = !!(L && L.buttons[7] && L.buttons[7].pressed); if (menu && !pauseBtnWas) setPaused(!paused); pauseBtnWas = menu;
+  if (paused && R) { const a = !!R.buttons[4]?.pressed, b = !!R.buttons[5]?.pressed; if (a && !resumeWas) setPaused(false); if (b && !resumeWas) { save(); drawPausePanel(); } resumeWas = a || b; }
+}
+$('resumeBtn').onclick = () => setPaused(false);
+$('saveBtn').onclick = () => { save(); $('pauseSaved').textContent = `Progress saved at ${stamp()}`; };
+addEventListener('keydown', e => { if (e.code === 'KeyP' && running && !inVR) setPaused(!paused); });
+document.addEventListener('visibilitychange', () => { if (document.hidden && running) { save(); if (!inVR) setPaused(true); } }); // switching away saves (and pauses on a PC)
+renderer.xr.addEventListener('sessionstart', () => { const s = renderer.xr.getSession(); if (s) s.addEventListener('visibilitychange', () => { if (s.visibilityState !== 'visible') setPaused(true); }); }); // Quest menu or headset off
 if (['localhost', '127.0.0.1'].includes(location.hostname)) { // debug hooks for local testing only
-window.__emberwild = { weapons: WEAPONS, arrows, deskW: () => deskW, hipW: () => hipW, setDay: v => { dayT = v; }, getDay: () => dayT, SITES, chests, crystals, pickups, villagers, HOUSES, groundAt, houseToWorld, interactableAt, renderer, S, enemies, ragdolls, hitEnemy, playerHands, poseHand, stones, camera, npcs, makeRagdoll, stepRagdoll, heightAt, headPos, dolly, spawnEnemy, startSwing, placePlayer, setYaw: v => { yaw = v; } }; // debug hook
+window.__emberwild = { doors, setPaused, isPaused: () => paused, weapons: WEAPONS, arrows, deskW: () => deskW, hipW: () => hipW, setDay: v => { dayT = v; }, getDay: () => dayT, SITES, chests, crystals, pickups, villagers, HOUSES, groundAt, houseToWorld, interactableAt, renderer, S, enemies, ragdolls, hitEnemy, playerHands, poseHand, stones, camera, npcs, makeRagdoll, stepRagdoll, heightAt, headPos, dolly, spawnEnemy, startSwing, placePlayer, setYaw: v => { yaw = v; } }; // debug hook
 // debug: fake VR controllers for testing grab logic on a desktop browser (no headset needed)
 window.__emberwild.simVR = () => {
   const mk = side => { const grip = new THREE.Group(); dolly.add(grip); const btn = () => ({ value: 0, pressed: false, touched: false }); const gamepad = { buttons: [btn(), btn(), btn(), btn(), btn(), btn(), btn()], axes: [0, 0, 0, 0], hapticActuators: [] }; hands[side] = { grip, src: { handedness: side, gamepad }, prev: [], isHand: false }; const ray = new THREE.Group(); grip.add(ray); rays[side] = ray; grip.add(playerHands[side].g); playerHands[side].g.rotation.set(0, 0, 0); return hands[side]; };
