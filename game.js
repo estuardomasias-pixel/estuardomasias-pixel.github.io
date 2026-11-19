@@ -156,7 +156,6 @@ const nearSite = (x, z, pad) => SITE_LIST.some(s => Math.hypot(x - s.x, z - s.z)
     pts.push({ x, z, h, s: 0.75 + rand() * 0.9, pine: h > 16 ? rand() < 0.85 : rand() < 0.4, rot: rand() * 6.28 });
   }
   const pines = pts.filter(p => p.pine), oaks = pts.filter(p => !p.pine);
-  // (random numbers are drawn in the same order as before so the world layout is unchanged)
   const q = new THREE.Quaternion(), sc = new THREE.Vector3(), p = new THREE.Vector3(), eul = new THREE.Euler();
   const mat4 = (t, y) => { q.setFromAxisAngle(THREE.Object3D.DEFAULT_UP, t.rot); sc.setScalar(t.s); p.set(t.x, y, t.z); return new THREE.Matrix4().compose(p, q, sc); };
   pts.forEach(t => { t.m = mat4(t, t.h - 0.2); addCollider(t.x, t.z, 0.35 * t.s); });
@@ -204,7 +203,7 @@ function makePanel(w, h, cw, ch, ss = 2) { // drawn at ss x resolution so text s
 }
 function makeLabel(text, color = '#ffe6a8', scale = 1.6) {
   const c = document.createElement('canvas'); c.width = 1024; c.height = 256; const x = c.getContext('2d'); x.scale(2, 2);
-  x.font = 'bold 60px system-ui,sans-serif'; x.textAlign = 'center'; x.textBaseline = 'middle';
+  x.font = 'bold 60px Arial,sans-serif'; x.textAlign = 'center'; x.textBaseline = 'middle';
   x.lineWidth = 10; x.strokeStyle = 'rgba(0,0,0,.75)'; x.strokeText(text, 256, 64); x.fillStyle = color; x.fillText(text, 256, 64);
   const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = MAX_ANISO;
   const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: t, depthWrite: false, fog: false })); s.scale.set(scale, scale / 4, 1); return s;
@@ -480,7 +479,7 @@ const elder = makeNPC('Elder Maren', { skin: SKIN, top: npcMat(0x3b5ba8), legs: 
   const hair = _hm(HG.hair, white, elder.r.skull, 0, 0.012, -0.012); hair.rotation.x = -0.45;
   const beard = _hm(HG.beard, white, elder.r.skull, 0, -0.12, 0.075); beard.rotation.x = Math.PI + 0.25;
   elder.staff = _hm(new THREE.CylinderGeometry(0.03, 0.035, 1.9, 6), M.wood, elder.r.hands[1], 0, 0.05, 0.02);
-  _hm(new THREE.IcosahedronGeometry(0.07, 0), M.lamp || M.gold, elder.staff, 0, 0.98, 0);
+  _hm(new THREE.IcosahedronGeometry(0.07, 0), M.lamp, elder.staff, 0, 0.98, 0);
   elder.r.arms[1].rotation.x = -0.3; elder.r.fore[1].rotation.x = -0.95; elder.skirt = skirt;
 }
 const anvil = new THREE.Mesh(new THREE.BoxGeometry(0.8, 0.6, 0.4), M.stone); anvil.position.set(-6.2, VH + 0.3, 4.4); scene.add(anvil);
@@ -540,7 +539,7 @@ const shield = new THREE.Group();
   const boss = new THREE.Mesh(new THREE.SphereGeometry(0.05, 8, 6), M.gold); boss.position.y = 0.02;
   shield.add(disc, rim, boss); shield.rotation.z = Math.PI / 2; shield.position.set(-0.07, 0, 0.05);
 }
-function restSword() { sword.position.set(0.3, -0.32, -0.45); sword.rotation.set(0.7, 0.15, -0.25); }
+function restSword() { sword.position.set(0.24, -0.24, -0.42); sword.rotation.set(0.7, 0.15, -0.25); } // low enough to stay out of the way, high enough that the glove shows
 camera.add(sword); restSword();
 
 // camera-attached panels (VR toast / prompt / hurt flash)
@@ -559,7 +558,7 @@ for (let i = 0; i < 2; i++) {
     const src = e.data; if (!src || !src.handedness || src.handedness === 'none') return;
     const side = src.handedness, isHand = !!src.hand;
     hands[side] = { grip, src, prev: [], isHand };
-    const model = playerHands[side]; grip.add(model.g); model.g.visible = !isHand; // tracked hands draw their own joints
+    const model = playerHands[side]; grip.add(model.g); model.g.position.set(0, 0, 0); model.g.rotation.set(0, 0, 0); model.g.visible = !isHand; // tracked hands draw their own joints
     if (side === 'right') { if (swordInHand) holdSword(); }
     else { grip.add(shield); grip.add(wrist.mesh); }
   });
@@ -577,7 +576,7 @@ renderer.xr.addEventListener('sessionend', () => {
   $('hud').style.display = running ? 'block' : 'none'; promptText = null;
   for (const side of ['left', 'right']) resetHandState(side);
   swordInHand = true; scabbard.visible = false;
-  camera.add(sword); restSword(); shield.removeFromParent(); wrist.mesh.removeFromParent();
+  camera.add(sword); restSword(); attachDesktopHand(); shield.removeFromParent(); wrist.mesh.removeFromParent();
   hands.left = hands.right = null;
 });
 function pulse(hand, intensity, ms) { try { hands[hand]?.src.gamepad?.hapticActuators?.[0]?.pulse(intensity, ms); } catch (e) { } }
@@ -665,7 +664,7 @@ const trackedHand = side => trackedHands.find(t => t.side === side && t.hand.vis
 let swordInHand = true;
 const scabbard = new THREE.Group(); scene.add(scabbard); scabbard.visible = false;
 {
-  const sheath = _hm(new THREE.BoxGeometry(0.075, 0.03, 0.86), M.dark, scabbard, 0, 0, -0.5);
+  _hm(new THREE.BoxGeometry(0.075, 0.03, 0.86), M.dark, scabbard, 0, 0, -0.5); // sheath
   _hm(new THREE.BoxGeometry(0.09, 0.04, 0.05), M.gold, scabbard, 0, 0, -0.08); _hm(new THREE.BoxGeometry(0.08, 0.035, 0.04), M.gold, scabbard, 0, 0, -0.92);
 }
 function holdSword() { const r = hands.right; if (!r) return; r.grip.add(sword); sword.position.set(0, 0, 0); sword.rotation.set(-0.35, 0, 0); swordInHand = true; }
@@ -720,7 +719,7 @@ function makePotionMesh() { const m = new THREE.Mesh(potionGeo, potionMat); cons
 // grab state per hand: null or { kind: 'stone'|'rag'|'potion', ... }
 const grab = { left: null, right: null }, gripHeld = { left: false, right: false }, gripToggle = { left: false, right: false }, hover = { left: null, right: null };
 const handHist = { left: [], right: [] };
-const _hp = new THREE.Vector3(), _hv = new THREE.Vector3(), _q1 = new THREE.Quaternion();
+const _hv = new THREE.Vector3(), _q1 = new THREE.Quaternion();
 function handVel(side, out) { // average over the last ~80 ms, with a little throw assist
   const H = handHist[side]; out.set(0, 0, 0); if (H.length < 2) return out;
   const a = H[H.length - 1]; let b = H[0]; for (let i = H.length - 2; i >= 0; i--) { b = H[i]; if (a.t - b.t > 0.08) break; }
@@ -819,7 +818,7 @@ const _head = new THREE.Vector3();
 function headPos() { camera.getWorldPosition(_head); return _head; }
 function forward2D() { camera.getWorldDirection(_v1); _v1.y = 0; if (_v1.lengthSq() < 1e-6) _v1.set(0, 0, -1); return _v1.normalize(); }
 function placePlayer(x, z) {
-  handHist.left.length = handHist.right.length = 0; // a teleport is not a throw
+  handHist.left.length = handHist.right.length = 0; airborne = false; jumpVy = 0; // a teleport is not a throw (or a jump)
   const h = headPos(); dolly.position.x += x - h.x; dolly.position.z += z - h.z; dolly.position.y = Math.max(heightAt(x, z), -1.3);
 }
 function movePlayer(dx, dz) {
@@ -838,7 +837,7 @@ function toast(msg, secs = 4) {
   const { ctx, canvas } = toastPanel; ctx.clearRect(0, 0, canvas.width, canvas.height);
   ctx.fillStyle = 'rgba(20,10,5,0.78)'; rr(ctx, 4, 4, canvas.width - 8, canvas.height - 8, 26); ctx.fill();
   ctx.strokeStyle = 'rgba(255,180,90,0.6)'; ctx.lineWidth = 4; ctx.stroke();
-  ctx.fillStyle = '#ffe9c4'; ctx.font = '38px system-ui,sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.fillStyle = '#ffe9c4'; ctx.font = '38px Arial,sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
   const lines = wrap(ctx, msg, canvas.width - 70).slice(0, 5); const lh = 46;
   lines.forEach((l, i) => ctx.fillText(l, canvas.width / 2, canvas.height / 2 + (i - (lines.length - 1) / 2) * lh));
   toastPanel.refresh(); toastPanel.mesh.visible = inVR; toastPanel.mat.opacity = 1;
@@ -848,14 +847,14 @@ function setPrompt(text) {
   if (text === promptText) return; promptText = text;
   $('prompt').style.display = text && !inVR ? 'block' : 'none'; $('prompt').textContent = text ? '[E] ' + text : '';
   const { ctx, canvas } = promptPanel; ctx.clearRect(0, 0, canvas.width, canvas.height);
-  if (text) { ctx.fillStyle = 'rgba(0,0,0,0.6)'; rr(ctx, 0, 0, canvas.width, canvas.height, 20); ctx.fill(); ctx.fillStyle = '#fff'; ctx.font = 'bold 40px system-ui,sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText('(A) ' + text, canvas.width / 2, canvas.height / 2); }
+  if (text) { ctx.fillStyle = 'rgba(0,0,0,0.6)'; rr(ctx, 0, 0, canvas.width, canvas.height, 20); ctx.fill(); ctx.fillStyle = '#fff'; ctx.font = 'bold 40px Arial,sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText((hands.right?.isHand ? 'Pinch: ' : '(A) ') + text, canvas.width / 2, canvas.height / 2); }
   promptPanel.refresh(); promptPanel.mesh.visible = !!text && inVR;
 }
 function questInfo() {
   const c = S.crystals.filter(Boolean).length;
   switch (S.stage) {
     case 0: return ['A Village in Shadow', 'Speak with Elder Maren by the campfire.'];
-    case 1: return ['Cull the Gloom', `Defeat gloomlings in the wilds (${S.qKills}/5).`];
+    case 1: return ['Cull the Gloom', `Defeat creatures of the Gloom in the wilds (${S.qKills}/5).`];
     case 2: return ['Cull the Gloom', 'Return to Elder Maren.'];
     case 3: return ['The Sun Crystals', `Follow the golden beams and find the Sun Crystals (${c}/3).`];
     case 4: return ['The Sun Crystals', 'Return to Elder Maren.'];
@@ -883,18 +882,18 @@ function drawWrist() {
   if (key === wristKey) return; wristKey = key;
   const { ctx, canvas } = wrist, W = canvas.width, H = canvas.height; ctx.clearRect(0, 0, W, H);
   ctx.fillStyle = 'rgba(14,10,24,0.88)'; rr(ctx, 0, 0, W, H, 30); ctx.fill(); ctx.strokeStyle = 'rgba(255,180,90,.6)'; ctx.lineWidth = 4; ctx.stroke();
-  ctx.fillStyle = '#ffcf8a'; ctx.font = 'bold 30px system-ui'; ctx.textAlign = 'left'; ctx.textBaseline = 'top';
-  ctx.fillText(`Lv ${S.level}`, 22, 16); ctx.fillStyle = '#fff'; ctx.font = '26px system-ui'; ctx.fillText(`Gold ${S.gold}   Potions ${S.potions}`, 140, 20);
+  ctx.fillStyle = '#ffcf8a'; ctx.font = 'bold 30px Arial,sans-serif'; ctx.textAlign = 'left'; ctx.textBaseline = 'top';
+  ctx.fillText(`Lv ${S.level}`, 22, 16); ctx.fillStyle = '#fff'; ctx.font = '26px Arial,sans-serif'; ctx.fillText(`Gold ${S.gold}   Potions ${S.potions}`, 140, 20);
   ctx.fillStyle = '#300'; rr(ctx, 22, 60, W - 44, 30, 15); ctx.fill(); ctx.fillStyle = '#e53935'; rr(ctx, 22, 60, (W - 44) * clamp(S.hp / maxHp(), 0, 1), 30, 15); ctx.fill();
-  ctx.fillStyle = '#fff'; ctx.font = 'bold 22px system-ui'; ctx.textAlign = 'center'; ctx.fillText(`${Math.ceil(S.hp)} / ${maxHp()}`, W / 2, 63);
+  ctx.fillStyle = '#fff'; ctx.font = 'bold 22px Arial,sans-serif'; ctx.textAlign = 'center'; ctx.fillText(`${Math.ceil(S.hp)} / ${maxHp()}`, W / 2, 63);
   ctx.fillStyle = '#332200'; rr(ctx, 22, 98, W - 44, 10, 5); ctx.fill(); ctx.fillStyle = '#ffd54f'; rr(ctx, 22, 98, (W - 44) * clamp(S.xp / xpNeed(), 0, 1), 10, 5); ctx.fill();
-  ctx.textAlign = 'left'; ctx.fillStyle = '#ffcf8a'; ctx.font = 'bold 26px system-ui'; ctx.fillText(title, 22, 122);
-  ctx.fillStyle = '#eee'; ctx.font = '23px system-ui'; wrap(ctx, desc, W - 44).slice(0, 3).forEach((l, i) => ctx.fillText(l, 22, 156 + i * 28));
+  ctx.textAlign = 'left'; ctx.fillStyle = '#ffcf8a'; ctx.font = 'bold 26px Arial,sans-serif'; ctx.fillText(title, 22, 122);
+  ctx.fillStyle = '#eee'; ctx.font = '23px Arial,sans-serif'; wrap(ctx, desc, W - 44).slice(0, 3).forEach((l, i) => ctx.fillText(l, 22, 156 + i * 28));
   if (od) {
     ctx.save(); ctx.translate(60, 300); ctx.rotate(od.ang); ctx.fillStyle = '#ffd54f'; ctx.beginPath(); ctx.moveTo(0, -30); ctx.lineTo(20, 22); ctx.lineTo(0, 10); ctx.lineTo(-20, 22); ctx.closePath(); ctx.fill(); ctx.restore();
-    ctx.fillStyle = '#fff'; ctx.font = '25px system-ui'; ctx.fillText(`${od.name}  ${od.dist} m`, 100, 287);
+    ctx.fillStyle = '#fff'; ctx.font = '25px Arial,sans-serif'; ctx.fillText(`${od.name}  ${od.dist} m`, 100, 287);
   }
-  ctx.textAlign = 'right'; ctx.fillStyle = '#9fdcaa'; ctx.font = '19px system-ui'; ctx.fillText(`${Math.round(fpsNow / 5) * 5} fps`, W - 20, 332);
+  ctx.textAlign = 'right'; ctx.fillStyle = '#9fdcaa'; ctx.font = '19px Arial,sans-serif'; ctx.fillText(`${Math.round(fpsNow / 5) * 5} fps`, W - 20, 332);
   wrist.refresh();
 }
 function updateHUD() {
@@ -922,7 +921,7 @@ function damagePlayer(d) {
   }
 }
 function drinkPotion() {
-  if (S.potions <= 0) { toast('No potions left. Buy... or find them on fallen foes and in chests.', 2.5); return; }
+  if (S.potions <= 0) { toast('No potions left. Find them on fallen foes and in chests.', 2.5); return; }
   if (S.hp >= maxHp()) { toast('You are already at full health.', 2); return; }
   S.potions--; S.hp = Math.min(maxHp(), S.hp + 55); sfx.drink(); burst(headPos().clone().add(_v2.set(0, -0.6, 0)), 0xff5577, 20, 1.5, 1.5);
 }
@@ -956,7 +955,7 @@ function spawnEnemy(key, x, z) {
   bg.position.x = -0.5; fg.position.set(-0.5, 0, 0.002); bar.add(bg, fg); bar.position.y = 2.1; bar.visible = false; g.add(bar);
   mergeRig(r, key); g.scale.setScalar(T.scale);
   const lv = 1 + 0.14 * (S.level - 1), nightMul = isNight() ? 1.2 : 1;
-  const e = { key, T, g, rig: r, upper: r.upper, mat, bar, fg, hp: T.hp * lv * nightMul, maxHp: T.hp * lv * nightMul, dmg: T.dmg * lv, x, z, vx: 0, vz: 0, atkCd: 1.2, hitCd: 0, flash: 0, lunge: 0, walk: Math.random() * 6, tilt: 0, tiltV: 0, phase: Math.random() * 6, wAng: Math.random() * 6.28, wT: 0, aggro: false, dead: false, rad: 0.4 * T.scale * T.chestW };
+  const e = { key, T, g, rig: r, upper: r.upper, mat, bar, fg, hp: T.hp * lv * nightMul, maxHp: T.hp * lv * nightMul, dmg: T.dmg * lv, x, z, vx: 0, vz: 0, atkCd: 1.2, hitCd: 0, flash: 0, lunge: 0, walk: Math.random() * 6, tilt: 0, tiltV: 0, wAng: Math.random() * 6.28, wT: 0, aggro: false, dead: false, rad: 0.4 * T.scale * T.chestW };
   g.position.set(x, heightAt(x, z), z); scene.add(g); enemies.push(e); return e;
 }
 function enemyCenter(e, out) { return out.set(e.x, e.g.position.y + 1.1 * e.T.scale, e.z); }
@@ -985,7 +984,7 @@ function killEnemy(e, imp) {
   const g = Math.round(lerp(e.T.gold[0], e.T.gold[1], Math.random())); S.gold += g; sfx.coin();
   gainXP(Math.round(e.T.xp * (1 + 0.1 * (S.level - 1))));
   if (Math.random() < (e.T.boss ? 1 : e.key === 'thorn' ? 0.35 : 0.18)) spawnPickup('potion', e.x, e.z);
-  if (S.stage === 1 && !e.T.boss) { S.qKills++; if (S.qKills >= 5) { S.stage = 2; sfx.quest(); toast('Quest updated: The gloomlings scatter! Return to Elder Maren.', 4); save(); } }
+  if (S.stage === 1 && !e.T.boss) { S.qKills++; if (S.qKills >= 5) { S.stage = 2; sfx.quest(); toast('Quest updated: The Gloom creatures scatter! Return to Elder Maren.', 4); save(); } }
   if (e.T.boss && S.stage === 5) { S.stage = 6; sfx.quest(); toast('The Hollow King is no more! The Gloom recedes... Return to Elder Maren.', 6); save(); }
 }
 
@@ -1178,7 +1177,7 @@ function updatePickups(dt) {
 // ---------------------------------------------------------------- interaction & dialogue
 const ELDER_LINES = {
   0: () => { S.stage = 1; S.qKills = 0; sfx.quest(); return 'Elder Maren: "Traveler, thank the embers you came. Gloomlings creep out of the woods each night. Thin their numbers - defeat 5 of them beyond the village."'; },
-  1: () => `Elder Maren: "Still ${5 - S.qKills} gloomling${5 - S.qKills === 1 ? '' : 's'} to go. They lurk out past the lantern posts."`,
+  1: () => `Elder Maren: "Still ${5 - S.qKills} creature${5 - S.qKills === 1 ? '' : 's'} of the Gloom to go. They lurk out past the lantern posts."`,
   2: () => { S.stage = 3; S.gold += 60; S.potions += 2; gainXP(80); sfx.quest(); return 'Elder Maren: "You fight like the old ember-wardens! Take 60 gold and 2 potions. Three Sun Crystals once shielded this valley. Follow the golden beams and bring back their light."'; },
   3: () => `Elder Maren: "${3 - S.crystals.filter(Boolean).length} Sun Crystal(s) still out there. Look for the golden pillars of light."`,
   4: () => { S.stage = 5; S.blessed = true; gainXP(120); sfx.quest(); return 'Elder Maren: "The crystals sing! I bless your blade with their light (+8 damage). The source of the Gloom is the Hollow King, in the Ashen Tower to the northeast. End him."'; },
@@ -1214,7 +1213,7 @@ function openChest(c) {
 // ---------------------------------------------------------------- input
 function lockPointer() { try { const p = renderer.domElement.requestPointerLock(); if (p && p.catch) p.catch(() => {}); } catch (e) { } }
 const keys = {}; let interactQueued = false, potionQueued = false, locked = false, running = false;
-addEventListener('keydown', e => { keys[e.code] = true; if (!running) return; if (e.code === 'KeyE') interactQueued = true; if (e.code === 'KeyQ') potionQueued = true; });
+addEventListener('keydown', e => { keys[e.code] = true; if (!running) return; if (e.code === 'KeyE') interactQueued = true; if (e.code === 'KeyQ') potionQueued = true; if (e.code === 'Space') { e.preventDefault(); jump(); } });
 addEventListener('keyup', e => { keys[e.code] = false; });
 document.addEventListener('pointerlockchange', () => { locked = document.pointerLockElement === renderer.domElement; });
 renderer.domElement.addEventListener('mousedown', e => { if (!running || inVR) return; if (!locked) lockPointer(); if (e.button === 0) startSwing(); });
@@ -1226,7 +1225,7 @@ function updateDesktopSword(dt) {
   if (inVR) return;
   if (swingT > 0) {
     swingT -= dt; const p = 1 - Math.max(0, swingT) / SWING, s = Math.sin(p * Math.PI), e = p * p * (3 - 2 * p);
-    sword.position.set(lerp(0.38, -0.12, e), -0.3 + s * 0.08, -0.5 - s * 0.15);
+    sword.position.set(lerp(0.3, -0.1, e), -0.24 + s * 0.08, -0.45 - s * 0.15);
     sword.rotation.set(0.7 - s * 0.9, lerp(-0.9, 1.0, e), lerp(-0.9, 0.6, e));
     if (!swingHit && p > 0.35) {
       swingHit = true; const h = headPos(), f = forward2D();
@@ -1254,14 +1253,16 @@ function updateVRSword(dt) {
   for (const e of enemies) { if (e.dead || e.hitCd > 0) continue; if (enemyBladeDist(e, hiltW, tipW) < e.rad + 0.1) hitEnemy(e, mult, h.x, h.z, _swImp.copy(velW).clampLength(0, 12)); }
 }
 let snapReady = true, runLatch = false;
+let airborne = false, jumpVy = 0; const JUMP_V = 5.2, JUMP_G = 12; // about 1.1 m high, 0.9 s in the air
+function jump() { if (airborne || !running) return; airborne = true; jumpVy = JUMP_V; tone(260, 0.1, 'triangle', 0.08, 140); }
 function updateMovement(dt) {
   let mx = 0, mz = 0, run = false, turn = 0;
   if (inVR) {
     const L = hands.left?.src.gamepad, R = hands.right?.src.gamepad;
     if (L) { const ax = L.axes.length >= 4 ? 2 : 0; mx = L.axes[ax] || 0; mz = L.axes[ax + 1] || 0; if (btnEdge('left', 3)) runLatch = true; if (Math.hypot(mx, mz) < 0.2) runLatch = false; run = runLatch; } // click the left stick to sprint
     if (R) { const ax = R.axes.length >= 4 ? 2 : 0; turn = R.axes[ax] || 0; }
-    if (btnEdge('right', 4)) interactQueued = true;
-    if (btnEdge('right', 5) || btnEdge('left', 4)) potionQueued = true;
+    if (btnEdge('right', 4)) { if (interactableAt(headPos())) interactQueued = true; else jump(); } // A: talk/open when something is in reach, otherwise jump
+    const qB = btnEdge('right', 5), qY = btnEdge('left', 5); if (qB || qY) potionQueued = true; // B or Y: quick-drink
     if (Math.abs(turn) > 0.7 && snapReady) {
       snapReady = false; handHist.left.length = handHist.right.length = 0; const ang = -Math.sign(turn) * Math.PI / 6, h = headPos().clone();
       _v2.subVectors(dolly.position, h).applyAxisAngle(THREE.Object3D.DEFAULT_UP, ang); dolly.position.copy(h).add(_v2); dolly.rotation.y += ang;
@@ -1277,7 +1278,10 @@ function updateMovement(dt) {
     movePlayer((f.x * -mz + rx * mx) * speed * dt, (f.z * -mz + rz * mx) * speed * dt);
   }
   const h = headPos(); const target = Math.max(heightAt(h.x, h.z), -1.3);
-  dolly.position.y = lerp(dolly.position.y, target, 1 - Math.exp(-dt * 12));
+  if (airborne) { // ballistic jump, then land on whatever height the ground has where you come down
+    jumpVy -= JUMP_G * dt; dolly.position.y += jumpVy * dt;
+    if (jumpVy < 0 && dolly.position.y <= target) { dolly.position.y = target; airborne = false; jumpVy = 0; tone(90, 0.12, 'triangle', 0.1); pulse('left', 0.3, 40); pulse('right', 0.3, 40); }
+  } else dolly.position.y = lerp(dolly.position.y, target, 1 - Math.exp(-dt * 12));
 }
 
 // ---------------------------------------------------------------- game flow
@@ -1290,7 +1294,6 @@ function startGame() {
 }
 $('play').onclick = () => { startGame(); lockPointer(); };
 $('reset').onclick = () => { if (confirm('Erase your saved progress and start over?')) { try { localStorage.removeItem(SAVE_KEY); } catch (e) { } location.reload(); } };
-document.addEventListener('pointerlockchange', () => { if (!locked && running && !inVR) { /* paused look; click to resume */ } });
 // ---------------------------------------------------------------- VR entry (native resolution + refresh rate)
 let fpsNow = 0, actualScale = 0;
 async function enterVR() {
@@ -1311,7 +1314,7 @@ async function enterVR() {
   } catch (e) { toast('Could not start VR: ' + e.message, 5); }
 }
 const vrBtn = document.createElement('button'); vrBtn.id = 'VRButton'; vrBtn.textContent = 'VR NOT SUPPORTED'; vrBtn.disabled = true;
-vrBtn.style.cssText = 'position:fixed;bottom:20px;left:50%;transform:translateX(-50%);z-index:20;padding:12px 22px;font:bold 15px system-ui;border-radius:6px;border:1px solid #fff;background:rgba(0,0,0,.4);color:#fff;cursor:pointer';
+vrBtn.style.cssText = 'position:fixed;bottom:20px;left:50%;transform:translateX(-50%);z-index:20;padding:12px 22px;font:bold 15px Arial,sans-serif;border-radius:6px;border:1px solid #fff;background:rgba(0,0,0,.4);color:#fff;cursor:pointer';
 document.body.appendChild(vrBtn);
 if (navigator.xr) navigator.xr.isSessionSupported('immersive-vr').then(ok => { if (ok) { vrBtn.disabled = false; vrBtn.textContent = 'ENTER VR'; } }).catch(() => { });
 vrBtn.onclick = () => { const s = renderer.xr.getSession(); if (s) s.end(); else enterVR(); };
@@ -1324,6 +1327,13 @@ if (resSel && hzSel) {
   resSel.onchange = store; hzSel.onchange = store;
 }
 
+// On a flat screen the right glove holds the sword. The sword sits on the VR grip rotated -0.35 rad about X,
+// so the hand goes on the sword with the inverse rotation, and its fingers are posed as a closed fist.
+function attachDesktopHand() {
+  const m = playerHands.right; sword.add(m.g); m.g.position.set(0, 0, 0); m.g.rotation.set(0.35, 0, 0); m.g.visible = true;
+  poseHand(m, [0.8, 0.9, 1, 1, 1], 1);
+}
+attachDesktopHand();
 placePlayer(S.x, S.z); camera.rotation.set(0, yaw, 0);
 // Compile every shader up front (renderer.compile skips hidden objects), so the first hit flash, message or
 // enemy doesn't stall a frame mid-fight while its program compiles.
@@ -1357,10 +1367,12 @@ renderer.setAnimationLoop(() => {
   renderer.render(scene, camera);
 });
 addEventListener('beforeunload', () => { if (running) save(); });
+if (['localhost', '127.0.0.1'].includes(location.hostname)) { // debug hooks for local testing only
 window.__emberwild = { setDay: v => { dayT = v; }, renderer, S, enemies, ragdolls, hitEnemy, playerHands, poseHand, stones, camera, npcs, makeRagdoll, stepRagdoll, heightAt, headPos, dolly, spawnEnemy, startSwing, placePlayer, setYaw: v => { yaw = v; } }; // debug hook
 // debug: fake VR controllers for testing grab logic on a desktop browser (no headset needed)
 window.__emberwild.simVR = () => {
-  const mk = side => { const grip = new THREE.Group(); dolly.add(grip); const btn = () => ({ value: 0, pressed: false, touched: false }); const gamepad = { buttons: [btn(), btn(), btn(), btn(), btn(), btn(), btn()], axes: [0, 0, 0, 0], hapticActuators: [] }; hands[side] = { grip, src: { handedness: side, gamepad }, prev: [], isHand: false }; grip.add(playerHands[side].g); return hands[side]; };
+  const mk = side => { const grip = new THREE.Group(); dolly.add(grip); const btn = () => ({ value: 0, pressed: false, touched: false }); const gamepad = { buttons: [btn(), btn(), btn(), btn(), btn(), btn(), btn()], axes: [0, 0, 0, 0], hapticActuators: [] }; hands[side] = { grip, src: { handedness: side, gamepad }, prev: [], isHand: false }; grip.add(playerHands[side].g); playerHands[side].g.rotation.set(0, 0, 0); return hands[side]; };
   inVR = true; const L = mk('left'), R = mk('right'); holdSword(); L.grip.add(shield);
   return { hands, grab, stones, scabbard, swordInHand: () => swordInHand, S, pickups, bodyPoint };
 };
+}
