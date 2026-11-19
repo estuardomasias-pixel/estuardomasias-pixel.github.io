@@ -789,7 +789,7 @@ renderer.xr.addEventListener('sessionstart', () => {
 renderer.xr.addEventListener('sessionend', () => {
   // keep the player where their head was (room-scale offset), not where the dolly origin is
   _v1.set(camera.position.x, 0, camera.position.z).applyQuaternion(dolly.quaternion); dolly.position.x += _v1.x; dolly.position.z += _v1.z;
-  inVR = false; heightOffset = 0; yaw = dolly.rotation.y; dolly.rotation.y = 0; pitch = 0; camera.position.set(0, 1.6, 0);
+  inVR = false; heightOffset = 0; deskSheathed = false; deskSheath = 0; sword.visible = true; yaw = dolly.rotation.y; dolly.rotation.y = 0; pitch = 0; camera.position.set(0, 1.6, 0);
   // WebXR overwrote the camera projection with the headset's; restore the flat-screen one
   camera.fov = 72; camera.zoom = 1; camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix();
   $('hud').style.display = running ? 'block' : 'none'; promptText = null;
@@ -886,8 +886,8 @@ const scabbard = new THREE.Group(); scene.add(scabbard); scabbard.visible = fals
   _hm(new THREE.BoxGeometry(0.075, 0.03, 0.86), M.dark, scabbard, 0, 0, -0.5); // sheath
   _hm(new THREE.BoxGeometry(0.09, 0.04, 0.05), M.gold, scabbard, 0, 0, -0.08); _hm(new THREE.BoxGeometry(0.08, 0.035, 0.04), M.gold, scabbard, 0, 0, -0.92);
 }
-function holdSword() { const r = hands.right; if (!r) return; r.grip.add(sword); sword.position.set(0, 0, 0); sword.rotation.set(-0.35, 0, 0); swordInHand = true; }
-function sheatheSword() { scabbard.add(sword); sword.position.set(0, 0, 0.02); sword.rotation.set(0, 0, 0); swordInHand = false; sfx.block(); }
+function holdSword() { const r = hands.right; if (!r) return; sword.visible = true; r.grip.add(sword); sword.position.set(0, 0, 0); sword.rotation.set(-0.35, 0, 0); swordInHand = true; }
+function sheatheSword() { sword.visible = true; scabbard.add(sword); sword.position.set(0, 0, 0.02); sword.rotation.set(0, 0, 0); swordInHand = false; sfx.block(); }
 const bodyPoint = (down, fwd, side, out) => { const h = headPos(), f = forward2D(); return out.set(h.x + f.x * fwd - f.z * side, h.y - down, h.z + f.z * fwd + f.x * side); };
 const _sheathPt = new THREE.Vector3(), _pocketPt = new THREE.Vector3(), _mouthPt = new THREE.Vector3();
 function updateScabbard() {
@@ -1515,14 +1515,17 @@ function openChest(c) {
 // ---------------------------------------------------------------- input
 function lockPointer() { try { const p = renderer.domElement.requestPointerLock(); if (p && p.catch) p.catch(() => {}); } catch (e) { } }
 const keys = {}; let interactQueued = false, potionQueued = false, locked = false, running = false;
-addEventListener('keydown', e => { keys[e.code] = true; if (!running) return; if (e.code === 'KeyE') interactQueued = true; if (e.code === 'KeyQ') potionQueued = true; if (e.code === 'Space') { e.preventDefault(); jump(); } });
+addEventListener('keydown', e => { keys[e.code] = true; if (!running) return; if (e.code === 'KeyE') interactQueued = true; if (e.code === 'KeyQ') potionQueued = true; if (e.code === 'Space') { e.preventDefault(); jump(); } if (e.code === 'KeyF') toggleDesktopSword(); });
 addEventListener('keyup', e => { keys[e.code] = false; });
 document.addEventListener('pointerlockchange', () => { locked = document.pointerLockElement === renderer.domElement; });
 renderer.domElement.addEventListener('mousedown', e => { if (!running || inVR) return; if (!locked) lockPointer(); if (e.button === 0) startSwing(); });
 addEventListener('mousemove', e => { if (!locked || inVR) return; yaw -= e.movementX * 0.0022; pitch = clamp(pitch - e.movementY * 0.0022, -1.4, 1.4); });
 
 let swingT = 0, swingHit = false; const SWING = 0.36;
-function startSwing() { if (swingT > 0) return; swingT = SWING; swingHit = false; sfx.swing(); }
+// Flat screen: F puts the sword away (it slides down out of view) or draws it again; clicking while it is away draws it.
+let deskSheathed = false, deskSheath = 0;
+function toggleDesktopSword() { if (inVR || swingT > 0) return; deskSheathed = !deskSheathed; if (deskSheathed) sfx.block(); else sfx.swing(); }
+function startSwing() { if (deskSheathed) { toggleDesktopSword(); return; } if (swingT > 0 || deskSheath > 0.05) return; swingT = SWING; swingHit = false; sfx.swing(); }
 function updateDesktopSword(dt) {
   if (inVR) return;
   if (swingT > 0) {
@@ -1537,6 +1540,9 @@ function updateDesktopSword(dt) {
       for (const rd of [...ragdolls]) { const c = rd.P[0].p, dx = c.x - h.x, dz = c.z - h.z, d = Math.hypot(dx, dz); if (d < 3 && (dx * f.x + dz * f.z) / (d || 1) > 0.3) nudgeRagdoll(rd, imp, 0.8); }
     }
     if (swingT <= 0) restSword();
+  } else { // resting, or sliding into / out of the sheath
+    deskSheath = clamp(deskSheath + (deskSheathed ? dt : -dt) * 5, 0, 1); const e = deskSheath * deskSheath * (3 - 2 * deskSheath);
+    restSword(); sword.position.y -= e * 0.6; sword.position.x += e * 0.08; sword.rotation.x += e * 0.7; sword.visible = deskSheath < 0.98;
   }
 }
 const prevTip = new THREE.Vector3(), _swTip = new THREE.Vector3(), _swHilt = new THREE.Vector3(), _swTipL = new THREE.Vector3(), _swVel = new THREE.Vector3(), _swImp = new THREE.Vector3(); let havePrev = false, tipSpeed = 0, whooshCd = 0;
