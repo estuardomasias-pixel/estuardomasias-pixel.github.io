@@ -1,0 +1,10 @@
+[
+  {
+    "relation": ["delegate_permission/common.handle_all_urls"],
+    "target": {
+      "namespace": "android_app",
+      "package_name": "io.github.estuardomasiaspixel.emberwild",
+      "sha256_cert_fingerprints": ["BC:46:C5:BB:91:6F:9E:92:14:90:73:AF:F8:3A:B5:D5:D6:D1:60:B6:B1:75:F7:8C:F9:02:C3:91:6E:FF:C1:9C"]
+    }
+  }
+]
